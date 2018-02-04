@@ -11,5 +11,8 @@
 - 4682 with "-1" year and "null" month
 - 6 with "null" year and "null" month
 
+## Term statistics
+- 224029 terms in total
+
 ## Found invalid values for "month" in papers.csv
 - Jun-Sep, MarMar, {, FebMar, JanAug-JanSep, Dec--JanMay\~{, FebFeb--FebJun, FebFeb, Jun--FebAug\~{
