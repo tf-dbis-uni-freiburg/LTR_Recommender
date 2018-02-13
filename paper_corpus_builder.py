@@ -1,13 +1,15 @@
-"""
-TODO explain what is paper corpus
-TODO give example how the corpus is used in different steps from the algorithm pipeline
-"""
 class PaperCorpusBuilder():
+    """
+    Class responsible for building the paper corpus. It consists of all papers (their citeulike_paper_ids) that
+    will be considered in the next stages of the algorithm. For example, when all terms in the corpus are extracted,
+    only terms from papers part of the paper corpus will be taken into account.
+    """
 
     def buildCorpus(self, papers, end_year):
         """
         Extract all papers which are published before a particular year. These papers are considered as paper corpus for
         all next stages of the algorithm. 
+        NOTE: Invalid values for paper year are null and -1. All papers that have such values are included in the paper corpus.
         
         :param papers: dataframe of all papers. Format -> 
             (citeulike_paper_id, type, journal, book_title, series, publisher, pages, volume, number, year, month, 
