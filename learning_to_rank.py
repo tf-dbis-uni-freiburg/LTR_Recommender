@@ -1,12 +1,11 @@
-from pyspark.ml.base import Transformer
+from pyspark.ml.base import Estimator
 from pyspark.ml.classification import LinearSVC
 from pyspark.ml.evaluation import Evaluator
 
-"""
-Class that implements different approaches of learning to rank algorithms.
-"""
-class LearningToRank(Transformer):
-
+class LearningToRank(Estimator):
+    """
+    Class that implements different approaches of learning to rank algorithms.
+    """
     def _fit(self, dataset):
         #TODO add possibility to configute featureCol dynamically
         lsvc = LinearSVC(maxIter=10, regParam=0.1, featuresCol="paper_pair_diff", labelCol="label")
@@ -14,10 +13,10 @@ class LearningToRank(Transformer):
         lsvcModel = lsvc.fit(dataset)
         return lsvcModel
 
-"""
-That that calculates how good are the predictions of learning-to-rank algorithm.
-"""
 class LearningToRankEvaluator(Evaluator):
+    """
+    That that calculates how good are the predictions of learning-to-rank algorithm.
+    """
 
     def _evaluate(self, dataset):
         """

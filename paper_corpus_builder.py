@@ -9,13 +9,14 @@ class PaperCorpusBuilder():
         """
         Extract all papers which are published before a particular year. These papers are considered as paper corpus for
         all next stages of the algorithm. 
-        NOTE: Invalid values for paper year are null and -1. All papers that have such values are included in the paper corpus.
+        NOTE: Invalid values for paper year are null and -1. All papers that have such values are included in the paper 
+        corpus.
         
         :param papers: dataframe of all papers. Format -> 
             (citeulike_paper_id, type, journal, book_title, series, publisher, pages, volume, number, year, month, 
             postedat, address, title, abstract)
         :param end_year: all papers published before this date are selected 
-        :return: dataframe that contains paper ids from all papers in the corpus
+        :return: data frame that contains paper ids from all papers in the corpus
         """
         # filter all papers which have "year" equals to null
         null_year_papers = papers.filter(papers.year.isNull())

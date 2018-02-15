@@ -191,7 +191,8 @@ class Loader:
         """
         bag_of_words_per_paper_rdd = self.spark.sparkContext.textFile(self.path + filename)
 
-        bag_of_words_per_paper_rdd = bag_of_words_per_paper_rdd.map(self.__parse_bag_of_words)
+        # TODO see what's the problem __parse_bag_of_words not being a static function
+        bag_of_words_per_paper_rdd = bag_of_words_per_paper_rdd.map(Loader.__parse_bag_of_words)
         # add 0-based id
         bag_of_words_per_paper_rdd = bag_of_words_per_paper_rdd.zipWithIndex()
         bag_of_words_per_paper_rdd = bag_of_words_per_paper_rdd.map(lambda x: (x[0][0], x[0][1], x[1]))
@@ -204,6 +205,7 @@ class Loader:
         bag_of_words_per_paper = bag_of_words_per_paper_rdd.toDF(bag_of_word_schema)
         return bag_of_words_per_paper
 
+    @staticmethod
     def __parse_bag_of_words(line):
         """
         Parse a line. Each line contains the terms of one paper. The first value of each line is the number of terms appeared in the corresponding paper.
