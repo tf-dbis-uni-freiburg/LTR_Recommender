@@ -1,14 +1,13 @@
 import os
-import datetime
 from loader import  Loader
 from paper_corpus_builder import PaperCorpusBuilder
 from splitter import  FoldSplitter, FoldStatisticsWriter
-from tf_vectorizer import  TFVectorizer
+from vectorizer import TFVectorizer
 from negative_papers_sampler import NegativePaperSampler
 from papers_pair_builder import PapersPairBuilder
 from learning_to_rank import LearningToRank
-import pyspark.sql.functions as F
 from spark_utils import *
+
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
 
@@ -27,7 +26,7 @@ papers_corpus = builder.buildCorpus(papers, 2005)
 papers_mappings = loader.load_papers_mapping("citeulikeId_docId_map.dat")
 # add paper_id to the corpus
 papers_corpus = papers_corpus.join(papers_mappings, "citeulike_paper_id")
-#
+
 # Loading history
 history = loader.load_history("current")
 
@@ -77,7 +76,8 @@ papers_pairs = papersPairBuilder.transform(training_data_set)
 # predict using SVM
 ltr = LearningToRank()
 lsvcModel = ltr.fit(papers_pairs)
-test_data_set_with_prediction = lsvcModel.transform(fold.test_data_frame)
+test_data_set_with_prediction = lsvcModel.transform(papers_pairs)
+# (negative_paper_id, positive_paper_id, user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_pair_diff, label, rawPrediction, prediction)
 test_data_set_with_prediction.show()
 
 # foldStatistics = FoldStatisticsWriter("statistics.txt")

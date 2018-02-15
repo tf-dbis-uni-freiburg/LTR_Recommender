@@ -1,4 +1,5 @@
 import datetime
+import math
 from collections import defaultdict
 import pyspark.sql.functions as F
 from pyspark.ml.linalg import Vectors
@@ -15,7 +16,8 @@ class UDFContainer():
     def __init__(self):
         # register all udfs when container is initialized
         self.vector_diff = F.udf(UDFContainer.__diff, VectorUDT())
-        self.map_to_vector = F.udf(UDFContainer.__map_to_vector, VectorUDT())
+        self.to_tf_vector = F.udf(UDFContainer.__to_tf_vector, VectorUDT())
+        self.to_tf_idf_vector = F.udf(UDFContainer.__to_tf_idf_vector, VectorUDT())
         self.generate_negatives = F.udf(UDFContainer.__generate_negatives, ArrayType(IntegerType(), False))
 
     @staticmethod
@@ -52,15 +54,30 @@ class UDFContainer():
         """
         return self.generate_negatives(positives, total_papers_count, k)
 
-    def map_to_vector_udf(self, terms_mapping, voc_size):
+    def to_tf_vector_udf(self, terms_mapping, voc_size):
         """
         From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
         The first is the term id. The second is the number of occurences, the term appears in a paper.
-
+        
+        :param terms_mapping: a list of lists. Each sublist contains 2 values
         :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
         :return: sparse vector based on the input mapping. It is a tf representation of a paper
         """
-        return self.map_to_vector(terms_mapping, voc_size)
+        return self.to_tf_vector(terms_mapping, voc_size)
+
+
+    def to_tf_idf_vector_udf(self, terms_mapping, voc_size, papers_count):
+        """
+        From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 3 values.
+        The first is the term id. The second is the number of occurences, the term appears in a paper - its
+        term frequence. The third is the number of papers the term appears - its document frequency.
+
+        :param terms_mapping: a list of lists. Each sublist contains 3 values
+        :param terms_count: the size of returned Sparse vector, total number of terms in the paper corpus
+        :param papers_count: total number of papers in the corpus
+        :return: sparse vector based on the input mapping. It is a tf-idf representation of a paper
+        """
+        return self.to_tf_idf_vector_udf(terms_mapping, voc_size, papers_count)
 
     ### Private Functions ###
 
@@ -109,19 +126,38 @@ class UDFContainer():
                 negatives.add(candidate)
         return list(negatives)
 
-    def __map_to_vector(terms_mapping, size):
+    def __to_tf_vector(terms_mapping, voc_size):
         """
         From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
         The first is the term id. The second is the number of occurences, the term appears in a paper.
         
+        :param terms_mapping:
         :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
         :return: sparse vector based on the input mapping. It is a tf representation of a paper
         """
         map = {}
         for term_id, term_occurrence in terms_mapping:
             map[term_id] = term_occurrence
-        # mapping of terms starts from 1, conpensate with the length of the vector
-        return Vectors.sparse(size + 1, map)
+        # mapping of terms starts from 1, compensate with the length of the vector
+        return Vectors.sparse(voc_size + 1, map)
+
+    def __to_tfidf_vector(terms_mapping, terms_count, papers_count):
+        """
+        From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 3 values.
+        The first is the term id. The second is the number of occurences, the term appears in a paper - its
+        term frequence. The third is the number of papers the term appears - its document frequency.
+
+        :param terms_mapping: a list of lists. Each sublist contains three elements.
+        :param terms_count: the size of returned Sparse vector, total number of terms in the paper corpus
+        :param papers_count: total number of papers in the corpus
+        :return: sparse vector based on the input mapping. It is a tf-idf representation of a paper
+        """
+        map = {}
+        for term_id, tf, df in terms_mapping:
+            tf_idf = tf * math.log(papers_count/df, 2)
+            map[term_id] = tf_idf
+        # mapping of terms starts from 1, compensate with the length of the vector
+        return Vectors.sparse(terms_count + 1, map)
 
 class SparkBroadcaster():
     """
