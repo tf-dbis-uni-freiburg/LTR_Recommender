@@ -19,6 +19,7 @@ class UDFContainer():
         self.to_tf_vector = F.udf(UDFContainer.__to_tf_vector, VectorUDT())
         self.to_tf_idf_vector = F.udf(UDFContainer.__to_tf_idf_vector, VectorUDT())
         self.generate_negatives = F.udf(UDFContainer.__generate_negatives, ArrayType(IntegerType(), False))
+        self.split_papers = F.udf(UDFContainer.__split_papers, ArrayType(ArrayType(IntegerType())))
 
     @staticmethod
     def getInstance():
@@ -78,6 +79,17 @@ class UDFContainer():
         :return: sparse vector based on the input mapping. It is a tf-idf representation of a paper
         """
         return self.to_tf_idf_vector(terms_mapping, voc_size, papers_count)
+
+    def split_papers_udf(self, papers_id_list):
+        """
+        Shuffle the input list of paper ids and divide it into two lists. The ratio is 50/50.
+        
+        :param: papers_id_list initial list of paper ids that will be split
+        :return: two arrays with paper ids. The first one contains the "positive paper ids" or those
+        which difference will be added with label 1. The second - "the negative paper ids" -  added with
+        label 0.
+        """
+        return self.split_papers(papers_id_list)
 
     ### Private Functions ###
 
@@ -155,22 +167,24 @@ class UDFContainer():
         map = {}
         for term_id, tf, df in terms_mapping:
             tf_idf = tf * math.log(papers_count/df, 2)
-            print(tf_idf)
             map[term_id] = tf_idf
         # mapping of terms starts from 1, compensate with the length of the vector
         return Vectors.sparse(terms_count + 1, map)
 
-    def split_papers(papersList, trainPerc):
+    def __split_papers(papers_id_list):
         """
-        TODO finish it
-        :param trainPerc: 
-        :return: 
+        Shuffle the input list of paper ids and divide it into two lists. The ratio is 50/50.
+        
+        :param: papers_id_list initial list of paper ids that will be split
+        :return: two arrays with paper ids. The first one contains the "positive paper ids" or those
+        which difference will be added with label 1. The second - "the negative paper ids" -  added with
+        label 0.
         """
-        shuffle(papersList)
-        number_selected = int(trainPerc * len(papersList))
-        trainingset = papersList[:number_selected]
-        testset = papersList[number_selected:]
-        return [trainingset, testset]
+        shuffle(papers_id_list)
+        ratio = int(0.5 * len(papers_id_list))
+        positive_class_set = papers_id_list[:ratio]
+        negative_class_set = papers_id_list[ratio:]
+        return [positive_class_set, negative_class_set]
 
 class SparkBroadcaster():
     """

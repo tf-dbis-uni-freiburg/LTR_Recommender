@@ -32,7 +32,36 @@ class PapersPairBuilder(Transformer):
     def _transform(self, dataset):
         if(self.pairs_generation == "equally_distributed_pairs"):
             # 50 % of the paper_pairs with label 1, 50% with label 0
-            print("sy")
+
+            # get a list of negative paper ids per paper
+            negatives_per_paper = dataset.groupBy("positive_paper_id").agg(F.collect_list("negative_paper_id").alias("negatives_per_paper"))
+
+            # generate 50/50 distribution to positive/negative class
+            negatives_per_paper = negatives_per_paper.withColumn("equally_distributed_papers", UDFContainer.getInstance().split_papers_udf("negatives_per_paper"))
+
+            # positive label 1
+            positive_class_per_paper = negatives_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
+            positive_class_per_paperf = positive_class_per_paper.select("positive_paper_id", F.explode("positive_class_papers").alias("negative_paper_id"))
+            positive_class_per_paper = dataset.join(positive_class_per_paper, (positive_class_per_paper.negative_paper_id == dataset.negative_paper_id) \
+                                                                        & (positive_class_per_paper.positive_paper_id == dataset.positive_paper_id) )
+            # add the difference (positive_paper_vector - negative_paper_vector) with label 1
+            positive_class_dataset = positive_class_per_paper.withColumn("paper_pair_diff", UDFContainer.getInstance().vector_diff_udf(
+                                                            "positive_paper_tf_vector", "negative_paper_tf_vector"))
+            # add label 1
+            positive_class_dataset = positive_class_dataset.withColumn("label", F.lit(1))
+
+            # positive label 0
+            negative_class_per_paper = negatives_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
+            negative_class_per_paper = negative_class_per_paper.select("positive_paper_id", F.explode("negative_class_papers").alias("negative_paper_id"))
+            negative_class_per_paper = dataset.join(negative_class_per_paper, (negative_class_per_paper.negative_paper_id == dataset.negative_paper_id) \
+                                                    & (negative_class_per_paper.positive_paper_id == dataset.positive_paper_id))
+            # add the difference (negative_paper_vector - positive_paper_vector) with label 0
+            negative_class_dataset = negative_class_per_paper.withColumn("paper_pair_diff", UDFContainer.getInstance().vector_diff_udf("negative_paper_tf_vector",
+                                                            "positive_paper_tf_vector"))
+            # add label 0
+            negative_class_dataset = negative_class_dataset.withColumn("label", F.lit(0))
+
+            return positive_class_dataset.union(negative_class_dataset)
         elif(self.pairs_generation == "duplicated_pairs"):
             # add the difference (positive_paper_vector - negative_paper_vector) with label 1
             positive_class_dataset = dataset.withColumn("paper_pair_diff",

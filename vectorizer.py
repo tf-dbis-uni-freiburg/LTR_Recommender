@@ -142,7 +142,6 @@ class TFIDFVectorizer(Estimator):
         dataset = indexed_exploded_papers.withColumn("tf_idf_vector",
                                                      UDFContainer.getInstance().to_tf_idf_vector_udf("term_occurrence",
                                                                                                   F.lit(voc_size), F.lit(papers_corpus_size)))
-
         paper_profiles = dataset.select("paper_id", "tf_idf_vector")
         return TFVectorizorModel(paper_profiles);
 

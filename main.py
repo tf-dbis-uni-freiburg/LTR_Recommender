@@ -27,54 +27,53 @@ papers_mappings = loader.load_papers_mapping("citeulikeId_docId_map.dat")
 # add paper_id to the corpus
 papers_corpus = papers_corpus.join(papers_mappings, "citeulike_paper_id")
 
-# # Loading history
-# history = loader.load_history("current")
-#
-# # Loading of the (citeulike user hash - user id) mapping
-# # format (citeulike_user_hash, user_id)
-# user_mappings = loader.load_users_mapping("citeulikeUserHash_userId_map.dat")
-#
-# # map citeulike_user_hash to user_id
-# # format of history (citeulike_paper_id, citeulike_user_hash, timestamp, tag, paper_id, user_id)
-# history = history.join(user_mappings, "citeulike_user_hash", "inner")
-#
-# # map citeulike_paper_id to paper_id
-# history = history.join(papers_mappings, "citeulike_paper_id", "inner")
-#
-# splitter = FoldSplitter()
-# fold = splitter.extract_fold(history, datetime.datetime(2005, 11, 4), 6)
+# Loading history
+history = loader.load_history("current")
 
-# # Negative papers sampling
-# nps = NegativePaperSampler(papers_corpus, 10)
-# # generate negative papers - [negative_paper_ids]
-# training_data_set = nps.transform(fold.training_data_frame)
+# Loading of the (citeulike user hash - user id) mapping
+# format (citeulike_user_hash, user_id)
+user_mappings = loader.load_users_mapping("citeulikeUserHash_userId_map.dat")
+
+# map citeulike_user_hash to user_id
+# format of history (citeulike_paper_id, citeulike_user_hash, timestamp, tag, paper_id, user_id)
+history = history.join(user_mappings, "citeulike_user_hash", "inner")
+
+# map citeulike_paper_id to paper_id
+history = history.join(papers_mappings, "citeulike_paper_id", "inner")
+
+splitter = FoldSplitter()
+fold = splitter.extract_fold(history, datetime.datetime(2005, 11, 4), 6)
+
+# Negative papers sampling
+nps = NegativePaperSampler(papers_corpus, 10)
+# generate negative papers - [negative_paper_ids]
+training_data_set = nps.transform(fold.training_data_frame)
 
 # Loading bag of words for each paper
 # format (paper_id, term_id, term_occurrence)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
 # train a model using term_occurrences of each paper and paper corpus
-tfidfVectorizer = TFIDFVectorizer(papers_corpus)
-tfVectorizerModel = tfidfVectorizer.fit(bag_of_words)
+tfVectorizer = TFVectorizer(papers_corpus)
+tfVectorizerModel = tfVectorizer.fit(bag_of_words)
 
-# tfVectorizerModel.paper_profiles.show()
-# # add tf paper representation to each paper based on its paper_id
-# training_data_set = tfVectorizerModel.transform(training_data_set)
-# print(training_data_set.take(1))
+# add tf paper representation to each paper based on its paper_id
+training_data_set = tfVectorizerModel.transform(training_data_set)
 
-# # rename newly generated paper_profile
-# training_data_set = training_data_set.withColumnRenamed("tf_vector", "positive_paper_tf_vector")
-# # # rename paper_id
-# training_data_set = training_data_set.withColumnRenamed("paper_id", "positive_paper_id")
-# # # rename paper_id
-# training_data_set = training_data_set.withColumnRenamed("negative_paper_id", "paper_id")
-# training_data_set = tfVectorizerModel.transform(training_data_set).withColumnRenamed("tf_vector", "negative_paper_tf_vector")
-# training_data_set = training_data_set.withColumnRenamed("paper_id", "negative_paper_id")
-#
-# # build pairs
-# papersPairBuilder = PapersPairBuilder("one_class_pairs")
-# papers_pairs = papersPairBuilder.transform(training_data_set)
-#
+# rename newly generated paper_profile
+training_data_set = training_data_set.withColumnRenamed("tf_vector", "positive_paper_tf_vector")
+# # rename paper_id
+training_data_set = training_data_set.withColumnRenamed("paper_id", "positive_paper_id")
+# # rename paper_id
+training_data_set = training_data_set.withColumnRenamed("negative_paper_id", "paper_id")
+training_data_set = tfVectorizerModel.transform(training_data_set).withColumnRenamed("tf_vector", "negative_paper_tf_vector")
+training_data_set = training_data_set.withColumnRenamed("paper_id", "negative_paper_id")
+
+# build pairs
+papersPairBuilder = PapersPairBuilder("equally_distributed_pairs")
+papers_pairs = papersPairBuilder.transform(training_data_set)
+papers_pairs.show()
+
 # # predict using SVM
 # ltr = LearningToRank()
 # lsvcModel = ltr.fit(papers_pairs)
