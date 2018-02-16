@@ -30,11 +30,9 @@ class PapersPairBuilder(Transformer):
         self.pairs_generation = pairs_generation
 
     def _transform(self, dataset):
-
         if(self.pairs_generation == "equally_distributed_pairs"):
-            #sthhh
             # 50 % of the paper_pairs with label 1, 50% with label 0
-            print("Has to be implemented")
+            print("sy")
         elif(self.pairs_generation == "duplicated_pairs"):
             # add the difference (positive_paper_vector - negative_paper_vector) with label 1
             positive_class_dataset = dataset.withColumn("paper_pair_diff",

@@ -11,7 +11,7 @@ class TFVectorizer(Estimator):
     of a paper is built.
     """
 
-    def __init__(self, spark, papers_corpus):
+    def __init__(self, papers_corpus):
         """
         Create an instance of the class.
         
@@ -86,7 +86,7 @@ class TFIDFVectorizer(Estimator):
     of a paper is built.
     """
 
-    def __init__(self, spark, papers_corpus):
+    def __init__(self, papers_corpus):
         """
         Create an instance of the class.
 
@@ -138,10 +138,9 @@ class TFIDFVectorizer(Estimator):
             F.collect_list(F.struct("indexed_term_id", "tf", "df")).alias("term_occurrence"))
 
         voc_size = terms.count()
-
         papers_corpus_size = self.papers_corpus.count()
         dataset = indexed_exploded_papers.withColumn("tf_idf_vector",
-                                                     UDFContainer.getInstance().map_to_vector_udf("term_occurrence",
+                                                     UDFContainer.getInstance().to_tf_idf_vector_udf("term_occurrence",
                                                                                                   F.lit(voc_size), F.lit(papers_corpus_size)))
 
         paper_profiles = dataset.select("paper_id", "tf_idf_vector")
@@ -152,8 +151,8 @@ class TFIDFVectorizorModel(Transformer):
     """
     Class that add a tf-idf vector representation to each paper based on paper_id.
     """
-
-    def __init__(self, paper_profiles, ):
+    
+    def __init__(self, paper_profiles):
         # format (paper_id, tf_idf_vector)
         self.paper_profiles = paper_profiles
 

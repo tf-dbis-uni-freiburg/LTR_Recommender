@@ -5,7 +5,7 @@ import pyspark.sql.functions as F
 from pyspark.ml.linalg import Vectors
 from pyspark.sql.types import *
 from pyspark.ml.linalg import VectorUDT
-from random import randint
+from random import randint, shuffle
 
 class UDFContainer():
     """
@@ -77,7 +77,7 @@ class UDFContainer():
         :param papers_count: total number of papers in the corpus
         :return: sparse vector based on the input mapping. It is a tf-idf representation of a paper
         """
-        return self.to_tf_idf_vector_udf(terms_mapping, voc_size, papers_count)
+        return self.to_tf_idf_vector(terms_mapping, voc_size, papers_count)
 
     ### Private Functions ###
 
@@ -141,7 +141,7 @@ class UDFContainer():
         # mapping of terms starts from 1, compensate with the length of the vector
         return Vectors.sparse(voc_size + 1, map)
 
-    def __to_tfidf_vector(terms_mapping, terms_count, papers_count):
+    def __to_tf_idf_vector(terms_mapping, terms_count, papers_count):
         """
         From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 3 values.
         The first is the term id. The second is the number of occurences, the term appears in a paper - its
@@ -155,9 +155,22 @@ class UDFContainer():
         map = {}
         for term_id, tf, df in terms_mapping:
             tf_idf = tf * math.log(papers_count/df, 2)
+            print(tf_idf)
             map[term_id] = tf_idf
         # mapping of terms starts from 1, compensate with the length of the vector
         return Vectors.sparse(terms_count + 1, map)
+
+    def split_papers(papersList, trainPerc):
+        """
+        TODO finish it
+        :param trainPerc: 
+        :return: 
+        """
+        shuffle(papersList)
+        number_selected = int(trainPerc * len(papersList))
+        trainingset = papersList[:number_selected]
+        testset = papersList[number_selected:]
+        return [trainingset, testset]
 
 class SparkBroadcaster():
     """

@@ -9,13 +9,11 @@ class NegativePaperSampler(Transformer):
     The negative papers are selected randomly.
     """
 
-    def __init__(self, spark, papers_corpus, k):
+    def __init__(self, papers_corpus, k):
         """
-        :param spark: spark instance used for broadcasting 
         :param papers_corpus: data frame that contains all papers from the corpus. Format (paper_id, citeulike_paper_id).
         :param k: number of negative papers that will be sampled per paper
         """
-        self.spark = spark
         self.papers_corpus = papers_corpus
         self.k = k
 
