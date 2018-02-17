@@ -19,7 +19,7 @@ class UDFContainer():
         self.to_tf_vector = F.udf(UDFContainer.__to_tf_vector, VectorUDT())
         self.to_tf_idf_vector = F.udf(UDFContainer.__to_tf_idf_vector, VectorUDT())
         self.generate_negatives = F.udf(UDFContainer.__generate_negatives, ArrayType(IntegerType(), False))
-        self.split_papers = F.udf(UDFContainer.__split_papers, ArrayType(ArrayType(IntegerType())))
+        self.split_papers = F.udf(UDFContainer.__split_papers, ArrayType(ArrayType(StringType())))
 
     @staticmethod
     def getInstance():
@@ -180,10 +180,13 @@ class UDFContainer():
         which difference will be added with label 1. The second - "the negative paper ids" -  added with
         label 0.
         """
+        print("callinh")
         shuffle(papers_id_list)
         ratio = int(0.5 * len(papers_id_list))
         positive_class_set = papers_id_list[:ratio]
+        print(positive_class_set)
         negative_class_set = papers_id_list[ratio:]
+        print(negative_class_set)
         return [positive_class_set, negative_class_set]
 
 class SparkBroadcaster():
