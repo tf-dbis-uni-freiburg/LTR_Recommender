@@ -6,9 +6,9 @@ class FoldSplitter:
     Class that contains functionality to split data frame into folds based on its "timestamp" column. Each fold consist of training and test data frame.
     """
 
-    def split_into_folds(self, data_frame, period_in_months):
+    def split_into_folds(self, data_frame, timestamp_col="timestamp", period_in_months=6, ):
         """
-        Dataframe will be split on a column "timestamp" based on the period_in_months parameter.
+        Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least recent date. 
         Folds are constructed starting for the least recent extracted date. For example, the first fold will contain the rows
         with timestamps in interval [the least recent date, the least recent extracted date + period_in_months] as its training set. The test set 
@@ -17,13 +17,14 @@ class FoldSplitter:
         included in the test set and everything else in the training set. 
         Currently, in total 23 folds. Data in period [2004-11-04, 2016-11-11]. Last fold ends in 2016-11-04.
         
-        :param data_frame: data frame that will be split. The "timestamp" column has to be present.
+        :param data_frame: data frame that will be split. The timestamp_col has to be present.
+        :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame.
         :return: list of folds. Each fold is an object Fold. 
         """
-        asc_data_frame = data_frame.orderBy("timestamp")
+        asc_data_frame = data_frame.orderBy(timestamp_col)
         start_date = asc_data_frame.first()[2]
-        desc_data_frame = data_frame.orderBy("timestamp", ascending = False)
+        desc_data_frame = data_frame.orderBy(timestamp_col, ascending = False)
         end_date = desc_data_frame.first()[2]
         folds = []
         # first fold will contain first "period_in_months" in the training set
@@ -39,26 +40,27 @@ class FoldSplitter:
             fold_end_date = fold_end_date + relativedelta(months = period_in_months)
         return folds
 
-    def extract_fold(self, data_frame, end_date, period_in_months):
+    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp"):
         """
-        Dataframe will be split into training and test set based on a column "timestamp" and the period_in_months parameter.
+        Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
         For example, if you have rows with timestamps in interval [2004-11-04, 2011-11-12] in the "data_frame", end_date is 2008-09-29 
         and period_in_months = 6, the test_set will be [2008-09-29, 2009-03-29] and the training_set -> [2004-11-04, 2008-09-28]
         The general rule is rows with timestamp in interval [end_date - period_in_months, end_date] are included in the test set. 
         Rows with timestamp before [end_date - period_in_months] are included in the training set.
         
-        :param data_frame: data frame from which the fold will be extracted. Because we filter based on timestamp, the "timestamp" column has to be present.
+        :param timestamp_col: the name of the timestamp column by which the splitting is done
+        :param data_frame: data frame from which the fold will be extracted. Because we filter based on timestamp, timestamp_col has to be present.
         :param end_date: the end date of the fold that has to be extracted
         :param period_in_months: what time duration will be the test set. Respectively, the training set.
-        :return: an object Fold, training and test data drame in the fold have the same format as the input data frame.
+        :return: an object Fold, training and test data frame in the fold have the same format as the input data frame.
         """
 
         # select only those rows which timestamp is between end_date and (end_date - period_in_months)
         test_set_start_date = end_date + relativedelta(months = -period_in_months)
 
         # remove all rows outside the period [test_start_date, test_end_date]
-        test_data_frame = data_frame.filter(data_frame.timestamp >= test_set_start_date).filter(data_frame.timestamp <= end_date)
-        training_data_frame = data_frame.filter(data_frame.timestamp < test_set_start_date)
+        test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(F.col(timestamp_col) <= end_date)
+        training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
 
         # construct the fold object
         fold = Fold(training_data_frame, test_data_frame)
@@ -112,13 +114,15 @@ class FoldStatisticsWriter:
                    "#PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | ")
         file.close()
 
-    def statistics(self, fold):
-        #TODO this method depends on "user_id" and "paper_id" columns names !!!
+    def statistics(self, fold, userId_col="user_id", paperId_col="paper_id"):
         """
-        Extract statistics from one fold. Each fold consists of test and training data.
-        At the end, write them in a file.
+        Extract statistics from one fold. Each fold consists of test and training data. TODO write what kind of statistics are computed.
+         At the end, write them in a file.
+        
         :param fold: object that contains information about the fold. It consists of training data frame and test data frame. 
-        Format of both of them - (citeulike_paper_id, paper_id, citeulike_user_hash, user_id).
+        :param userId_col the name of the column that represents a user by its id or hash
+        :param paperId_col the name of the column that represents a paper by its id 
+        Possible format of the data frames in the fold - (citeulike_paper_id, paper_id, citeulike_user_hash, user_id).
         """
 
         full_data_set = fold.training_data_frame.union(fold.test_data_frame)
@@ -131,44 +135,44 @@ class FoldStatisticsWriter:
         ts_ratings_count = fold.test_data_frame.count()
 
         # user statistics #users in total, TR, TS
-        total_users_count = full_data_set.select("user_id").distinct().count()
-        tr_users = fold.training_data_frame.select("user_id").distinct()
+        total_users_count = full_data_set.select(userId_col).distinct().count()
+        tr_users = fold.training_data_frame.select(userId_col).distinct()
         tr_users_count = tr_users.count()
-        test_users = fold.test_data_frame.select("user_id").distinct()
+        test_users = fold.test_data_frame.select(userId_col).distinct()
         test_users_count = test_users.count()
         new_users_count = tr_users.subtract(test_users).count()
 
         # items in total, TR, TS (with or without new items)
-        total_items_count = full_data_set.select("paper_id").distinct().count()
-        tr_items = fold.training_data_frame.select("paper_id").distinct()
+        total_items_count = full_data_set.select(paperId_col).distinct().count()
+        tr_items = fold.training_data_frame.select(paperId_col).distinct()
         tr_items_count = tr_items.count()
-        test_items = fold.test_data_frame.select("paper_id").distinct()
+        test_items = fold.test_data_frame.select(paperId_col).distinct()
         test_items_count = test_items.count()
         new_items_count = tr_items.subtract(test_items).count()
 
         # positive ratings per user - min/max/avg/std in TR
-        tr_ratings_per_user = fold.training_data_frame.groupBy("user_id").agg(F.count("*").alias("papers_count"))
+        tr_ratings_per_user = fold.training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
         tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
         tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
         tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
         tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
 
         # positive ratings per user - min/max/avg/std in TS
-        ts_ratings_per_user = fold.test_data_frame.groupBy("user_id").agg(F.count("*").alias("papers_count"))
+        ts_ratings_per_user = fold.test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
         ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
         ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
         ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
         ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
 
         # positive ratings per item - min/max/avg/std in TR
-        tr_ratings_per_item = fold.training_data_frame.groupBy("paper_id").agg(F.count("*").alias("ratings_count"))
+        tr_ratings_per_item = fold.training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
         tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
         tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
         tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
         tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
 
         # positive ratings per item - min/max/avg/std in TR
-        ts_ratings_per_item = fold.test_data_frame.groupBy("paper_id").agg(F.count("*").alias("ratings_count"))
+        ts_ratings_per_item = fold.test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
         ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
         ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
         ts_avg_ratings_per_item = ts_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
