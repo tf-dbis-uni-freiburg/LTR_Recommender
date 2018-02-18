@@ -6,42 +6,27 @@ class LearningToRank(Estimator):
     """
     Class that implements different approaches of learning to rank algorithms.
     """
-    # TODO add comments
-    def __init__(self, maxIter=10, regParam=0.1, featuresCol="features", labelCol="label"):
-        self._maxIter = maxIter
-        self._regParam = regParam
-        self._featuresCol = featuresCol
-        self._labelCol = labelCol
+
+    def __init__(self, max_iter=10, reg_param=0.1, features_col="features", label_col="label"):
+        """
+        Init the learning-to-rank model.
+        
+        :param max_iter: the maximum number of iterations
+        :param reg_param: regularization parameter
+        :param features_col: the name of the column that contains the feature representation 
+        the model will be trained on
+        :param label_col: the name of the column that contains the class of each feature representation
+        """
+        self.max_iter = max_iter
+        self.reg_param = reg_param
+        self.features_col = features_col
+        self.label_col = label_col
 
     def _fit(self, dataset):
-        lsvc = LinearSVC(self.maxIter, self.regParam, self.featuresCol, self.labelCol)
+        lsvc = LinearSVC(self.max_iter, self.reg_param, self.features_col, self.label_col)
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
         return lsvcModel
-
-    def setMaxIter(self, maxIter):
-        self._maxIter = maxIter
-
-    def maxIter(self):
-        return self._maxIter
-
-    def setRegParam(self, regParam):
-        self._regParam = regParam
-
-    def regParam(self):
-        return self._regParam
-
-    def setFeaturesCol(self, featuresCol):
-        self._featuresCol = featuresCol
-
-    def featuresCol(self):
-        return self._featuresCol
-
-    def setLabelCol(self, labelCol):
-        self._labelCol = labelCol
-
-    def labelCol(self):
-        return self._labelCol
 
 class LearningToRankEvaluator(Evaluator):
     """

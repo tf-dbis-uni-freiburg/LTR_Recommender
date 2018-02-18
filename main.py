@@ -62,22 +62,20 @@ training_data_set = tfVectorizerModel.transform(training_data_set)
 tfVectorizerModel.setPaperIdCol("negative_paper_id")
 tfVectorizerModel.setOutputTfCol("negative_paper_tf_vector")
 training_data_set = tfVectorizerModel.transform(training_data_set)
-training_data_set.show()
 #
 # # build pairs
-# # negative_paper_tf_vector, positive_paper_tf_vector
-# papersPairBuilder = PapersPairBuilder("equally_distributed_pairs", positive_paperId_col="paper_id", netagive_paperId_col="negative_paper_id",
-#                  positive_paper_vector_col="positive_paper_tf_vector", negative_paper_vector_col="negative_paper_tf_vector",
-#                  output_col="pair_paper_difference", label_col="label")
-# papers_pairs = papersPairBuilder.transform(training_data_set)
-# papers_pairs.show()
-#
-# # # predict using SVM
-# ltr = LearningToRank(featuresCol="pair_paper_difference", labelCol="label")
-# lsvcModel = ltr.fit(papers_pairs)
-# test_data_set_with_prediction = lsvcModel.transform(papers_pairs)
-# # (negative_paper_id, positive_paper_id, user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_pair_diff, label, rawPrediction, prediction)
-# test_data_set_with_prediction.show()
+# negative_paper_tf_vector, positive_paper_tf_vector
+papersPairBuilder = PapersPairBuilder("equally_distributed_pairs", positive_paperId_col="paper_id", netagive_paperId_col="negative_paper_id",
+                 positive_paper_vector_col="positive_paper_tf_vector", negative_paper_vector_col="negative_paper_tf_vector",
+                 output_col="pair_paper_difference", label_col="label")
+papers_pairs = papersPairBuilder.transform(training_data_set)
+
+# predict using SVM
+ltr = LearningToRank(features_col="pair_paper_difference", label_col="label")
+lsvcModel = ltr.fit(papers_pairs)
+data_set_with_prediction = lsvcModel.transform(papers_pairs)
+# (negative_paper_id, positive_paper_id, user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_pair_diff, label, rawPrediction, prediction)
+data_set_with_prediction.show()
 
 # foldStatistics = FoldStatisticsWriter("statistics.txt")
 # sth = foldStatistics.statistics(fold)

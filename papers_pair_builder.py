@@ -21,6 +21,7 @@ class PapersPairBuilder(Transformer):
         """
         Constructs the builder.
 
+
         :param pairs_generation: there are three possible values: duplicated_pairs, one_class_pairs, 
         equally_distributed_pairs.For example, if we have a paper p_p, and a set of negative papers N for the paper p
         1) if it is "duplicated_pairs" - for each paper n_p of the set N, calculate (p_p - p_n, class:1) and 
@@ -28,6 +29,12 @@ class PapersPairBuilder(Transformer):
         2) if it is "one_class_pairs" - for each paper n_p of the set N, calculate (p_p - p_n, class:1)
         3) if it is "equally_distributed_pairs" - for 50% of papers in the set N, calculate p_p - p_n, class:1), 
         and for the other 50% (p_n - p_p, class: 0)
+        :param positive_paperId_col name of the column that contains positive paper id
+        :param netagive_paperId_col name of the column that contains negative paper id
+        :param positive_paper_vector_col name of the column that contains representation of the positive paper
+        :param negative_paper_vector_col name of the column that contains representation of the negative paper
+        :param output_col: name of the column where the result vector is stored
+        :param label_col name of the column where the class of the pair/result is stored
         """
         self.pairs_generation = pairs_generation
         self.positive_paperId_col = positive_paperId_col
@@ -53,8 +60,8 @@ class PapersPairBuilder(Transformer):
 
             positive_class_per_paper = positive_class_per_paper.select(self.positive_paperId_col, F.explode("positive_class_papers").alias(self.netagive_paperId_col))
             # fix this
-            positive_class_dataset = dataset.join(positive_class_per_paper, (positive_class_per_paper.nagetive_paper_id == dataset.negative_paper_id)
-                                                                        & (positive_class_per_paper.positive_paper_id == dataset.positive_paper_id) )
+            positive_class_dataset = dataset.join(positive_class_per_paper, (positive_class_per_paper[self.netagive_paperId_col] == dataset[self.netagive_paperId_col])
+                                                                        & (positive_class_per_paper[self.positive_paperId_col] == dataset[self.positive_paperId_col]) )
 
             # add the difference (positive_paper_vector - negative_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(
@@ -65,8 +72,8 @@ class PapersPairBuilder(Transformer):
             # negative label 0
             negative_class_per_paper = negatives_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
             negative_class_per_paper = negative_class_per_paper.select(self.positive_paperId_col, F.explode("negative_class_papers").alias(self.netagive_paperId_col))
-            negative_class_dataset = dataset.join(negative_class_per_paper, (negative_class_per_paper.negative_paper_id == dataset.negative_paper_id) \
-                                                    & (negative_class_per_paper.positive_paper_id == dataset.positive_paper_id))
+            negative_class_dataset = dataset.join(negative_class_per_paper, (negative_class_per_paper[self.netagive_paperId_col] == dataset[self.netagive_paperId_col]) \
+                                                    & (negative_class_per_paper[self.positive_paperId_col] == dataset[self.positive_paperId_col]))
 
             # add the difference (negative_paper_vector - positive_paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(self.negative_paper_vector_col,
@@ -98,5 +105,4 @@ class PapersPairBuilder(Transformer):
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
-
         return dataset
