@@ -23,7 +23,7 @@ class LearningToRank(Estimator):
         self.label_col = label_col
 
     def _fit(self, dataset):
-        lsvc = LinearSVC(self.max_iter, self.reg_param, self.features_col, self.label_col)
+        lsvc = LinearSVC(maxIter=self.max_iter, regParam=self.reg_param, featuresCol=self.features_col, labelCol=self.label_col)
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
         return lsvcModel

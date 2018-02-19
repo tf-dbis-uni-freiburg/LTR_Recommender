@@ -1,8 +1,11 @@
 import os
+
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+
 from loader import  Loader
 from paper_corpus_builder import PaperCorpusBuilder
-from splitter import  FoldSplitter, FoldStatisticsWriter
-from vectorizer import *
+from fold_utils import  FoldSplitter, FoldStatisticsWriter, FoldValidator
+from vectorizers import *
 from negative_papers_sampler import NegativePaperSampler
 from papers_pair_builder import PapersPairBuilder
 from learning_to_rank import LearningToRank
@@ -39,6 +42,14 @@ history = history.join(user_mappings, "citeulike_user_hash", "inner")
 # map citeulike_paper_id to paper_id
 history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 
+# Loading bag of words for each paper
+# format (paper_id, term_id, term_occurrence)
+bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
+#
+# fold_validator = FoldValidator(history, papers, papers_mapping, fold_period_in_months=6, timestamp_col="timestamp",
+#                  paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+# fold_validator.evaluate_on_folds()
+
 splitter = FoldSplitter()
 fold = splitter.extract_fold(history, datetime.datetime(2005, 11, 4), 6, timestamp_col="timestamp")
 
@@ -46,10 +57,7 @@ fold = splitter.extract_fold(history, datetime.datetime(2005, 11, 4), 6, timesta
 nps = NegativePaperSampler(papers_corpus, 10, paperId_col="paper_id", userId_col="user_id", output_col="negative_paper_id")
 # generate negative papers - [negative_paper_ids]
 training_data_set = nps.transform(fold.training_data_frame)
-
-# Loading bag of words for each paper
-# format (paper_id, term_id, term_occurrence)
-bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
+test_data_set = nps.transform(fold.test_data_frame)
 
 # train a model using term_occurrences of each paper and paper corpus
 tfVectorizer = TFVectorizer(papers_corpus=papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_tf_col="positive_paper_tf_vector")
@@ -58,24 +66,34 @@ tfVectorizerModel = tfVectorizer.fit(bag_of_words)
 # add tf paper representation to each paper based on its paper_id
 # add for positive papers
 training_data_set = tfVectorizerModel.transform(training_data_set)
+test_data_set = tfVectorizerModel.transform(test_data_set)
+
 # add for negative papers
 tfVectorizerModel.setPaperIdCol("negative_paper_id")
 tfVectorizerModel.setOutputTfCol("negative_paper_tf_vector")
 training_data_set = tfVectorizerModel.transform(training_data_set)
-#
+
 # # build pairs
 # negative_paper_tf_vector, positive_paper_tf_vector
 papersPairBuilder = PapersPairBuilder("equally_distributed_pairs", positive_paperId_col="paper_id", netagive_paperId_col="negative_paper_id",
                  positive_paper_vector_col="positive_paper_tf_vector", negative_paper_vector_col="negative_paper_tf_vector",
                  output_col="pair_paper_difference", label_col="label")
-papers_pairs = papersPairBuilder.transform(training_data_set)
+training_papers_pairs = papersPairBuilder.transform(training_data_set)
 
 # predict using SVM
 ltr = LearningToRank(features_col="pair_paper_difference", label_col="label")
-lsvcModel = ltr.fit(papers_pairs)
-data_set_with_prediction = lsvcModel.transform(papers_pairs)
-# (negative_paper_id, positive_paper_id, user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_pair_diff, label, rawPrediction, prediction)
-data_set_with_prediction.show()
+lsvcModel = ltr.fit(training_papers_pairs)
 
+test_data_set = test_data_set.withColumnRenamed("positive_paper_tf_vector", "pair_paper_difference")
+test_data_set_with_prediction = lsvcModel.transform(test_data_set, featuresCol="positive_paper_tf_vector")
+
+test_data_set_with_prediction.show()
+
+# metricName=areaUnderROC/areaUnderPR
+evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",
+                 metricName="areaUnderROC")
+metric = evaluator.evaluate(test_data_set_with_prediction)
+
+print(metric)
 # foldStatistics = FoldStatisticsWriter("statistics.txt")
 # sth = foldStatistics.statistics(fold)
