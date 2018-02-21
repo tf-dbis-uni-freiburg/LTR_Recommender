@@ -18,7 +18,7 @@ class UDFContainer():
         self.vector_diff = F.udf(UDFContainer.__diff, VectorUDT())
         self.to_tf_vector = F.udf(UDFContainer.__to_tf_vector, VectorUDT())
         self.to_tf_idf_vector = F.udf(UDFContainer.__to_tf_idf_vector, VectorUDT())
-        self.generate_negatives = F.udf(UDFContainer.__generate_negatives, ArrayType(IntegerType(), False))
+        self.generate_peers = F.udf(UDFContainer.__generate_peers, ArrayType(IntegerType(), False))
         self.split_papers = F.udf(UDFContainer.__split_papers, ArrayType(ArrayType(StringType())))
 
     @staticmethod
@@ -43,17 +43,17 @@ class UDFContainer():
         """
         return self.vector_diff(v1, v2)
 
-    def generate_negatives_udf(self, positives, total_papers_count, k):
+    def generate_peers_udf(self, positives, total_papers_count, k):
         """
-        Generate negative papers for a paper. For example, if a total number of paper is 6, means that in the paper corpus these are the possible paper ids [1, 2, 3, 4, 5, 6].
+        Generate peer papers for a paper. For example, if a total number of paper is 6, means that in the paper corpus these are the possible paper ids [1, 2, 3, 4, 5, 6].
         It randomly selects k of them. None of the selected id has to be in "positives" list.
 
-        :param positives: list of paper ids. The intersection of the positives and the generated negatives has to be empty.
+        :param positives: list of paper ids. The intersection of the positives and the generated peers has to be empty.
         :param total_papers_count: total number of papers in the paper corpus
-        :param k: how many negative papers have to be generated
-        :return: a list of paper ids corresponding to negative papers for a paper
+        :param k: how many peer papers have to be generated
+        :return: a list of paper ids corresponding to peer papers for a paper
         """
-        return self.generate_negatives(positives, total_papers_count, k)
+        return self.generate_peers(positives, total_papers_count, k)
 
     def to_tf_vector_udf(self, terms_mapping, voc_size):
         """
@@ -120,23 +120,23 @@ class UDFContainer():
             values[v2.indices[i]] -= v2.values[i]
         return Vectors.sparse(v1.size, dict(values))
 
-    def __generate_negatives(positives, total_papers_count, k):
+    def __generate_peers(positives, total_papers_count, k):
         """
-        Generate negative papers for a paper. For example, if a total number of paper is 6, means that in the paper corpus these are the possible paper ids [1, 2, 3, 4, 5, 6].
+        Generate peers papers for a paper. For example, if a total number of paper is 6, means that in the paper corpus these are the possible paper ids [1, 2, 3, 4, 5, 6].
         It randomly selects k of them. None of the selected id has to be in "positives" list.
 
-        :param positives: list of paper ids. The intersection of the positives and the generated negatives has to be empty.
+        :param positives: list of paper ids. The intersection of the positives and the generated peers has to be empty.
         :param total_papers_count: total number of papers in the paper corpus
-        :param k: how many negative papers have to be generated
-        :return: a list of paper ids corresponding to negative papers for a paper
+        :param k: how many peer papers have to be generated
+        :return: a list of paper ids corresponding to peer papers for a paper
         """
-        negatives = set()
-        while len(negatives) < k:
+        peers = set()
+        while len(peers) < k:
             candidate = randint(1, total_papers_count + 1)
             # if a candidate paper is not in positives for an user and there exists paper with such id in the paper corpus
-            if candidate not in positives and candidate not in negatives:
-                negatives.add(candidate)
-        return list(negatives)
+            if candidate not in positives and candidate not in peers:
+                peers.add(candidate)
+        return list(peers)
 
     def __to_tf_vector(terms_mapping, voc_size):
         """

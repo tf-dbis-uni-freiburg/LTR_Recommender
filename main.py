@@ -6,7 +6,7 @@ from loader import  Loader
 from paper_corpus_builder import PaperCorpusBuilder
 from fold_utils import  FoldSplitter, FoldStatisticsWriter, FoldValidator
 from vectorizers import *
-from negative_papers_sampler import NegativePaperSampler
+from peers_sampler import PeerPapersSampler
 from papers_pair_builder import PapersPairBuilder
 from learning_to_rank import LearningToRank
 from spark_utils import *
@@ -20,7 +20,6 @@ spark = SparkSession.builder.master("local").appName("LTRRecommender").getOrCrea
 loader = Loader("../citeulike_crawled/terms_keywords_based/", spark);
 
 papers = loader.load_papers("papers.csv")
-
 # # Loading of the (citeulike paper id - paper id) mapping
 # # format (citeulike_paper_id, paper_id)
 papers_mapping = loader.load_papers_mapping("citeulikeId_docId_map.dat")
@@ -45,6 +44,7 @@ history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 # Loading bag of words for each paper
 # format (paper_id, term_id, term_occurrence)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
+
 #
 # fold_validator = FoldValidator(history, papers, papers_mapping, fold_period_in_months=6, timestamp_col="timestamp",
 #                  paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
@@ -53,30 +53,29 @@ bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 splitter = FoldSplitter()
 fold = splitter.extract_fold(history, datetime.datetime(2005, 11, 4), 6, timestamp_col="timestamp")
 
-# Negative papers sampling
-nps = NegativePaperSampler(papers_corpus, 10, paperId_col="paper_id", userId_col="user_id", output_col="negative_paper_id")
-# generate negative papers - [negative_paper_ids]
+# peer papers sampling
+nps = PeerPapersSampler(papers_corpus, 10, paperId_col="paper_id", userId_col="user_id", output_col="peer_paper_id")
+# generate peer papers - [peer_paper_ids]
 training_data_set = nps.transform(fold.training_data_frame)
 test_data_set = nps.transform(fold.test_data_frame)
 
 # train a model using term_occurrences of each paper and paper corpus
-tfVectorizer = TFVectorizer(papers_corpus=papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_tf_col="positive_paper_tf_vector")
+tfVectorizer = TFVectorizer(papers_corpus=papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_tf_col="paper_tf_vector")
 tfVectorizerModel = tfVectorizer.fit(bag_of_words)
 
 # add tf paper representation to each paper based on its paper_id
-# add for positive papers
 training_data_set = tfVectorizerModel.transform(training_data_set)
 test_data_set = tfVectorizerModel.transform(test_data_set)
 
-# add for negative papers
-tfVectorizerModel.setPaperIdCol("negative_paper_id")
-tfVectorizerModel.setOutputTfCol("negative_paper_tf_vector")
+# add for peer papers
+tfVectorizerModel.setPaperIdCol("peer_paper_id")
+tfVectorizerModel.setOutputTfCol("peer_paper_tf_vector")
 training_data_set = tfVectorizerModel.transform(training_data_set)
 
 # # build pairs
-# negative_paper_tf_vector, positive_paper_tf_vector
-papersPairBuilder = PapersPairBuilder("equally_distributed_pairs", positive_paperId_col="paper_id", netagive_paperId_col="negative_paper_id",
-                 positive_paper_vector_col="positive_paper_tf_vector", negative_paper_vector_col="negative_paper_tf_vector",
+# peer_paper_tf_vector, paper_tf_vector
+papersPairBuilder = PapersPairBuilder("equally_distributed_pairs", paperId_col="paper_id", peer_paperId_col="peer_paper_id",
+                 paper_vector_col="paper_tf_vector", peer_paper_vector_col="peer_paper_tf_vector",
                  output_col="pair_paper_difference", label_col="label")
 training_papers_pairs = papersPairBuilder.transform(training_data_set)
 
@@ -84,8 +83,8 @@ training_papers_pairs = papersPairBuilder.transform(training_data_set)
 ltr = LearningToRank(features_col="pair_paper_difference", label_col="label")
 lsvcModel = ltr.fit(training_papers_pairs)
 
-test_data_set = test_data_set.withColumnRenamed("positive_paper_tf_vector", "pair_paper_difference")
-test_data_set_with_prediction = lsvcModel.transform(test_data_set, featuresCol="positive_paper_tf_vector")
+test_data_set = test_data_set.withColumnRenamed("paper_tf_vector", "pair_paper_difference")
+test_data_set_with_prediction = lsvcModel.transform(test_data_set)
 
 test_data_set_with_prediction.show()
 
@@ -95,5 +94,6 @@ evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labe
 metric = evaluator.evaluate(test_data_set_with_prediction)
 
 print(metric)
+
 # foldStatistics = FoldStatisticsWriter("statistics.txt")
 # sth = foldStatistics.statistics(fold)

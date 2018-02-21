@@ -2,7 +2,7 @@ from dateutil.relativedelta import relativedelta
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 
 from paper_corpus_builder import PaperCorpusBuilder
-from negative_papers_sampler import NegativePaperSampler
+from peers_sampler import PeerPapersSampler
 from vectorizers import *
 from papers_pair_builder import  PapersPairBuilder
 from learning_to_rank import LearningToRank
@@ -146,33 +146,32 @@ class FoldValidator():
             end_year = fold.ts_end_date.year
             papers_corpus = self.builder.buildCorpus(self.papers, self.papers_mapping, end_year=end_year, paperId_col=self.paperId_Col,
                                             citeulikePaperId_col = self.citeulikePaperId_col)
-            # Negative papers sampling
-            nps = NegativePaperSampler(papers_corpus, self.k, paperId_col=self.paperId_Col, userId_col=self.userId_col,
-                                       output_col="negative_paper_id")
+            # Peer papers sampling
+            nps = PeerPapersSampler(papers_corpus, self.k, paperId_col=self.paperId_Col, userId_col=self.userId_col,
+                                       output_col="peer_paper_id")
 
-            # generate negative papers - [negative_paper_ids]
+            # generate peer papers - [peer_paper_ids]
             training_data_set = nps.transform(fold.training_data_frame)
             test_data_set = nps.transform(fold.test_data_frame)
 
             # train a model using term_occurrences of each paper and paper corpus
             tfVectorizer = TFVectorizer(papers_corpus=papers_corpus, paperId_col=self.paperId_Col, tf_map_col=self.tf_map_col,
-                                        output_tf_col="positive_paper_tf_vector")
+                                        output_tf_col="paper_tf_vector")
             tfVectorizerModel = tfVectorizer.fit(self.bag_of_words)
 
             # add tf paper representation to each paper based on its paper_id
-            # add for positive papers
             training_data_set = tfVectorizerModel.transform(training_data_set)
             test_data_set = tfVectorizerModel.transform(test_data_set)
 
-            # add tf paper representation  for negative papers
-            tfVectorizerModel.setPaperIdCol("negative_paper_id")
-            tfVectorizerModel.setOutputTfCol("negative_paper_tf_vector")
+            # add tf paper representation  for peer papers
+            tfVectorizerModel.setPaperIdCol("peer_paper_id")
+            tfVectorizerModel.setOutputTfCol("peer_paper_tf_vector")
             training_data_set = tfVectorizerModel.transform(training_data_set)
 
             # # build pairs
-            # negative_paper_tf_vector, positive_paper_tf_vector
-            papersPairBuilder = PapersPairBuilder(self.pairs_generation, positive_paperId_col=self.paperId_Col, netagive_paperId_col="negative_paper_id",
-                             positive_paper_vector_col="positive_paper_tf_vector", negative_paper_vector_col="negative_paper_tf_vector",
+            # peer_paper_tf_vector, paper_tf_vector
+            papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_Col, peer_paperId_col="peer_paper_id",
+                             paper_vector_col="paper_tf_vector", peer_paper_vector_col="peer_paper_tf_vector",
                              output_col="pair_paper_difference", label_col="label")
             papers_pairs = papersPairBuilder.transform(training_data_set)
 
@@ -181,7 +180,7 @@ class FoldValidator():
             lsvcModel = ltr.fit(papers_pairs)
 
             # predict over the test data set
-            test_data_set = test_data_set.withColumnRenamed("positive_paper_tf_vector", "pair_paper_difference")
+            test_data_set = test_data_set.withColumnRenamed("paper_tf_vector", "pair_paper_difference")
             test_data_set_with_prediction = lsvcModel.transform(test_data_set)
 
             # possible metrics -> areaUnderROC/areaUnderPR
@@ -252,28 +251,28 @@ class FoldStatisticsWriter:
         test_items_count = test_items.count()
         new_items_count = tr_items.subtract(test_items).count()
 
-        # positive ratings per user - min/max/avg/std in TR
+        # ratings per user - min/max/avg/std in TR
         # tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
         # tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
         # tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
         # tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
         # tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
         #
-        # # positive ratings per user - min/max/avg/std in TS
+        # # ratings per user - min/max/avg/std in TS
         # ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
         # ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
         # ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
         # ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
         # ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
         #
-        # # positive ratings per item - min/max/avg/std in TR
+        # # ratings per item - min/max/avg/std in TR
         # tr_ratings_per_item = training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
         # tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
         # tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
         # tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
         # tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
         #
-        # # positive ratings per item - min/max/avg/std in TR
+        # # ratings per item - min/max/avg/std in TR
         # ts_ratings_per_item = test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
         # ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
         # ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
