@@ -4,8 +4,8 @@ class PaperCorpusBuilder():
     will be considered in the next stages of the algorithm. For example, when all terms in the corpus are extracted,
     only terms from papers part of the paper corpus will be taken into account.
     """
-
-    def buildCorpus(self, papers, papers_mapping, end_year, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id"):
+    @staticmethod
+    def buildCorpus(papers, papers_mapping, end_year, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id"):
         """
         Extract all papers which are published before a particular year. These papers are considered as paper corpus for
         all next stages of the algorithm. Each paper in the papers data frame is mapped by citeulike paper id. But this

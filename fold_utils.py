@@ -1,18 +1,16 @@
 from dateutil.relativedelta import relativedelta
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
-
 from paper_corpus_builder import PaperCorpusBuilder
-from peers_sampler import PeerPapersSampler
 from vectorizers import *
-from papers_pair_builder import  PapersPairBuilder
 from learning_to_rank import LearningToRank
+from pyspark.sql.types import *
 
 class FoldSplitter:
     """
     Class that contains functionality to split data frame into folds based on its "timestamp" column. Each fold consist of training and test data frame.
     """
-
-    def split_into_folds(self, data_frame, timestamp_col="timestamp", period_in_months=6):
+    # TODO write comments
+    def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", store=True):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least recent date. 
@@ -26,24 +24,35 @@ class FoldSplitter:
         :param data_frame: data frame that will be split. The timestamp_col has to be present.
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame.
+        :param store
         :return: list of folds. Each fold is an object Fold. 
         """
-        asc_data_frame = data_frame.orderBy(timestamp_col)
+        asc_data_frame = history.orderBy(timestamp_col)
         start_date = asc_data_frame.first()[2]
-        desc_data_frame = data_frame.orderBy(timestamp_col, ascending = False)
+        desc_data_frame = history.orderBy(timestamp_col, ascending=False)
         end_date = desc_data_frame.first()[2]
+        fold_index = 1
         folds = []
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
-        fold_end_date = start_date + relativedelta(months = 2*period_in_months)
+        fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
-            fold = self.extract_fold(data_frame, fold_end_date, period_in_months)
+            fold = self.extract_fold(history, fold_end_date, period_in_months)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
+            fold.set_index(fold_index)
+            # build the corpus for the fold, it includes all papers published til the end of the fold
+            fold_paper_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
+            fold.set_paper_corpus(fold_paper_corpus)
+            # store the fold
+            if(store):
+                fold.store()
+            # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be
             # in its test set
-            fold_end_date = fold_end_date + relativedelta(months = period_in_months)
+            fold_end_date = fold_end_date + relativedelta(months=period_in_months)
+            fold_index += 1
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp"):
@@ -62,10 +71,11 @@ class FoldSplitter:
         """
 
         # select only those rows which timestamp is between end_date and (end_date - period_in_months)
-        test_set_start_date = end_date + relativedelta(months = -period_in_months)
+        test_set_start_date = end_date + relativedelta(months=-period_in_months)
 
         # remove all rows outside the period [test_start_date, test_end_date]
-        test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(F.col(timestamp_col) <= end_date)
+        test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
+            F.col(timestamp_col) <= end_date)
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
 
         # construct the fold object
@@ -77,24 +87,38 @@ class FoldSplitter:
 
 class Fold:
     """
-    Encapsulates the notion of a fold. Each fold consists of training and test data frame. 
-    Each fold is extracted based on the timestamp of the samples. The samples in the test set are from a particular period in time.
-    For example, the test_set can contains samples from [2008-09-29, 2009-03-29] and the training_set from [2004-11-04, 2008-09-28].
-    Important note is that the test set starts when the training set ends. The samples are sorted by their timestamp column.
-    Therefore, additional information for each fold is when the test set starts and ends. Respectively the same for
-    the training set. Also, the duration of the test set - period_in_months.
+    Encapsulates the notion of a fold. Each fold consists of training and test data frame. Each fold has an index which indicated 
+    its position in the sequence of all extracted folds. The index starts from 1. Each fold is extracted based on the timestamp of 
+    the samples. The samples in the test set are from a particular period in time. For example, the test_set can contains samples from
+    [2008-09-29, 2009-03-29] and the training_set from [2004-11-04, 2008-09-28]. Important note is that the test set starts when the training 
+    set ends. The samples are sorted by their timestamp column. Therefore, additional information for each fold is when the test set starts and ends. 
+    Respectively the same for the training set. Also, the duration of the test set - period_in_months.
     """
+    # TODO write comments
+    TEST_DF_CSV_FILENAME = "test.csv"
+    TRAINING_DF_CSV_FILENAME = "training.csv"
+    PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
+    PREFIX_FOLD_FOLDER_NAME = "fold-"
 
+    # TODO write comments
     def __init__(self, training_data_frame, test_data_frame):
+        self.index = None
         self.training_data_frame = training_data_frame
         self.test_data_frame = test_data_frame
         self.period_in_months = None
         self.tr_start_date = None
         self.ts_end_date = None
         self.ts_start_date = None
+        self.paper_corpus = None
+
+    def set_index(self, index):
+        self.index = index
+
+    def set_paper_corpus(self, paper_corpus):
+        self.paper_corpus = paper_corpus
 
     def set_period_in_months(self, period_in_months):
-       self.period_in_months = period_in_months
+        self.period_in_months = period_in_months
 
     def set_test_set_start_date(self, ts_start_date):
         self.ts_start_date = ts_start_date
@@ -105,6 +129,18 @@ class Fold:
     def set_training_set_start_date(self, tr_start_date):
         self.tr_start_date = tr_start_date
 
+    # TODO write comments
+    def store(self):
+        # save test data frame
+        self.test_data_frame.write.csv(
+            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TEST_DF_CSV_FILENAME)
+        # save training data frame
+        self.training_data_frame.write.csv(
+            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TRAINING_DF_CSV_FILENAME)
+        # save paper coprus
+        self.paper_corpus.papers.write.csv(
+            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME)
+
 class FoldValidator():
     """
     Class that run all phases of the Learning To Rank algorithm on multiple folds. It divides the input data set based 
@@ -112,18 +148,14 @@ class FoldValidator():
     the training set.Then the prediction over the test set is calculated and evaluated using BinaryClassificationEvaluator.
     At the end, the result is averaged over all folds.
     """
-    def __init__(self, history, papers, papers_mapping, bag_of_words, fold_period_in_months, k=10, pairs_generation="equally_distributed_pairs",
-                 timestamp_col="timestamp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", userId_col="user_id",
-                 tf_map_col="term_occurrence"):
-        self.fold_splitter = FoldSplitter()
-        self.corpus_builder = PaperCorpusBuilder()
-        self.history = history
-        self.fold_period_in_months = fold_period_in_months
-        self.timestamp_col = timestamp_col
-        self.papers = papers
+    NUMBER_OF_FOLD = 0;
+
+    def __init__(self, bag_of_words, k=10,
+                 pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+                 userId_col="user_id", tf_map_col="term_occurrence"):
+        # TODO write comments
         self.paperId_Col = paperId_col
         self.citeulikePaperId_col = citeulikePaperId_col
-        self.papers_mapping = papers_mapping
         self.k = k
         self.bag_of_words = bag_of_words
         self.pairs_generation = pairs_generation
@@ -131,68 +163,71 @@ class FoldValidator():
         self.tf_map_col = tf_map_col
         self.folds_evaluation = {}
 
+    #TODO write comments
     def evaluate_on_folds(self):
-        """
-        Run a LTR algorithm on multiple fold. Evaluate the prediction for each fold and return the averaged.
-        BinaryClassificationEvaluator is used.
-        :return: averaged areaUnderROC over the folds
-        """
-        # creates all splits
-        folds =  self.fold_splitter.split_into_folds(self.history, self.timestamp_col, self.fold_period_in_months)
-        i = 1
-        area_under_ROC_evaluation = 0
-        for fold in folds:
-            # based on when a test set ends, build the paper corpus
-            end_year = fold.ts_end_date.year
-            papers_corpus = self.builder.buildCorpus(self.papers, self.papers_mapping, end_year=end_year, paperId_col=self.paperId_Col,
-                                            citeulikePaperId_col = self.citeulikePaperId_col)
-            # Peer papers sampling
-            nps = PeerPapersSampler(papers_corpus, self.k, paperId_col=self.paperId_Col, userId_col=self.userId_col,
-                                       output_col="peer_paper_id")
-
-            # generate peer papers - [peer_paper_ids]
-            training_data_set = nps.transform(fold.training_data_frame)
-            test_data_set = nps.transform(fold.test_data_frame)
+        # load folds one by one and evaluate on them
+        # total number of fold  - 23
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD):
+            fold = self.load_fold(i)
+            fold.test_data_frame.show()
 
             # train a model using term_occurrences of each paper and paper corpus
-            tfVectorizer = TFVectorizer(papers_corpus=papers_corpus, paperId_col=self.paperId_Col, tf_map_col=self.tf_map_col,
-                                        output_tf_col="paper_tf_vector")
-            tfVectorizerModel = tfVectorizer.fit(self.bag_of_words)
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_Col,
+                                              tf_map_col=self.tf_map_col, output_tf_col="paper_tf_vector")
+            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            # add tf paper representation to each paper based on its paper_id
-            training_data_set = tfVectorizerModel.transform(training_data_set)
-            test_data_set = tfVectorizerModel.transform(test_data_set)
+            ltr = LearningToRank(fold.paper_corpus, tfidfModel, pairs_generation="equally_distributed", k=10,
+                                 paperId_col="paper_id",
+                                 userId_col="user_id", features_col="features", label_col="label")
+            lsvcModel = ltr.fit(fold.training_data_frame)
 
-            # add tf paper representation  for peer papers
-            tfVectorizerModel.setPaperIdCol("peer_paper_id")
-            tfVectorizerModel.setOutputTfCol("peer_paper_tf_vector")
-            training_data_set = tfVectorizerModel.transform(training_data_set)
+            # predict for each fold
+            # TODO CONTINUE
 
-            # # build pairs
-            # peer_paper_tf_vector, paper_tf_vector
-            papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_Col, peer_paperId_col="peer_paper_id",
-                             paper_vector_col="paper_tf_vector", peer_paper_vector_col="peer_paper_tf_vector",
-                             output_col="pair_paper_difference", label_col="label")
-            papers_pairs = papersPairBuilder.transform(training_data_set)
 
-            # predict using SVM
-            ltr = LearningToRank(features_col="pair_paper_difference", label_col="label")
-            lsvcModel = ltr.fit(papers_pairs)
+    # TODO WRITE COMMENTS
+    def evaluate_on_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
+        # creates all splits
+        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
+                                                paperId_col = self.paperId_Col, citeulikePaperId_col = self.citeulikePaperId_col, store=True)
+        FoldValidator.NUMBER_OF_FOLD = len(folds)
+        for fold in folds:
+            #train a model using term_occurrences of each paper and paper corpus
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_Col,
+                                            tf_map_col=self.tf_map_col, output_tf_col="paper_tf_vector")
+            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            # predict over the test data set
-            test_data_set = test_data_set.withColumnRenamed("paper_tf_vector", "pair_paper_difference")
-            test_data_set_with_prediction = lsvcModel.transform(test_data_set)
+            ltr = LearningToRank(fold.paper_corpus, tfidfModel, pairs_generation="equally_distributed", k=10, paperId_col="paper_id",
+                 userId_col="user_id", features_col="features", label_col="label")
+            lsvcModel = ltr.fit(fold.training_data_frame)
 
-            # possible metrics -> areaUnderROC/areaUnderPR
-            evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",
-                             metricName="areaUnderROC")
-            evaluation = evaluator.evaluate(test_data_set_with_prediction)
-            fold_name = str(i) + '_' + str(end_year)
-            self.folds_evaluation[fold_name] = evaluation
-            area_under_ROC_evaluation += evaluation
-            i = i + 1
-        # calculate the average areaUnderROC
-        return area_under_ROC_evaluation / i
+            # predict for each fold
+            #TODO CONTINUE
+
+    # TODO write comments
+    def load(self, index):
+        fold = Fold()
+        fold.index = index
+        # (name, dataType, nullable)
+        fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
+                                  StructField("citeulike_user_hash", StringType(), False),
+                                  StructField("timestamp", TimestampType(), False),
+                                  StructField("user_id", IntegerType(), False),
+                                  StructField("paper_id", IntegerType(), False)])
+        # load test data frame
+        fold.test_data_frame = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + "/" + Fold.TEST_DF_CSV_FILENAME, header=False,
+                                              schema=fold_schema)
+        # load training data frame
+        fold.training_data_frame = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + "/" + Fold.TRAINING_DF_CSV_FILENAME,
+                                                  header=False, schema=fold_schema)
+
+        # (name, dataType, nullable)
+        paper_corpus_schema = StructType([StructField("citeulike_paper_id", StringType(), False), StructField("paper_id", IntegerType(), False)])
+        # load training data frame
+        fold.papers_corpus.papers = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME,
+                                                       header=False, schema=paper_corpus_schema)
+        fold.paper_corpus.paperId_col = "paper_id"
+        fold.paper_corpus.citeulikePaperId_col = "citeulike_paper_id"
 
 
 class FoldStatisticsWriter:
@@ -209,8 +244,9 @@ class FoldStatisticsWriter:
         self.filename = filename
         file = open(filename, "w")
         # write the header in the file
-        file.write("fold_name | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems | #ratsTot | #ratsTR | #ratsTS | " +
-                   "#PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | ")
+        file.write(
+            "fold_name | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems | #ratsTot | #ratsTR | #ratsTS | " +
+            "#PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | ")
         file.close()
 
     def statistics(self, fold, userId_col="user_id", paperId_col="paper_id"):
@@ -283,11 +319,10 @@ class FoldStatisticsWriter:
         file = open(self.filename, "w")
         formatted_line = line.format(fold_name, total_users_count, tr_users_count, test_users_count, new_users_count, \
                                      total_items_count, tr_items_count, test_items_count, new_items_count, \
-                                     total_ratings_count, tr_ratings_count, ts_ratings_count) #, \
-                                     # tr_min_ratings_per_user + "/" + tr_max_ratings_per_user+ "/" + tr_avg_ratings_per_user + "/" + tr_std_ratings_per_user, \
-                                     # ts_min_ratings_per_user + "/" + ts_max_ratings_per_user + "/" + ts_avg_ratings_per_user + "/" + ts_std_ratings_per_user, \
-                                     # tr_min_ratings_per_item + "/" + tr_max_ratings_per_item + "/" + tr_avg_ratings_per_item + "/" + tr_std_ratings_per_item, \
-                                     # ts_min_ratings_per_item + "/" + ts_max_ratings_per_item + "/" + ts_avg_ratings_per_item + "/" + ts_std_ratings_per_item)
+                                     total_ratings_count, tr_ratings_count, ts_ratings_count)  # , \
+        # tr_min_ratings_per_user + "/" + tr_max_ratings_per_user+ "/" + tr_avg_ratings_per_user + "/" + tr_std_ratings_per_user, \
+        # ts_min_ratings_per_user + "/" + ts_max_ratings_per_user + "/" + ts_avg_ratings_per_user + "/" + ts_std_ratings_per_user, \
+        # tr_min_ratings_per_item + "/" + tr_max_ratings_per_item + "/" + tr_avg_ratings_per_item + "/" + tr_std_ratings_per_item, \
+        # ts_min_ratings_per_item + "/" + ts_max_ratings_per_item + "/" + ts_avg_ratings_per_item + "/" + ts_std_ratings_per_item)
         file.write(formatted_line)
         file.close()
-
