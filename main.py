@@ -1,6 +1,5 @@
 import os
 
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
 
 from loader import  Loader
 from paper_corpus_builder import PaperCorpusBuilder
@@ -37,19 +36,19 @@ history = history.join(user_mappings, "citeulike_user_hash", "inner")
 history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 
 # Loading bag of words for each paper
-# format (paper_id, term_id, term_occurrence)
+# format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
 fold_validator = FoldValidator(bag_of_words, k=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence")
-fold_validator.evaluate_on_folds(history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
+# if you want to store folds
+#fold_validator.evaluate_on_folds(history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
 
+# if folds are already stored and we only load them
+fold_validator.evaluate_folds(spark)
 
 # splitter = FoldSplitter(spark)
 # #fold = splitter.extract_fold(history, datetime.datetime(2004, 11, 4), 6, timestamp_col="timestamp")
-#
-# fold = splitter.load_fold(FoldSplitter.PREFIX_FOLD_FOLDER_NAME + str(1))
-# fold.training_data_frame.show()
 
 # # peer papers sampling
 # nps = PeerPapersSampler(papers_corpus, 10, paperId_col="paper_id", userId_col="user_id", output_col="peer_paper_id")

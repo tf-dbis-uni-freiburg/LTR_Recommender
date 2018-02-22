@@ -1,16 +1,19 @@
 from dateutil.relativedelta import relativedelta
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
-from paper_corpus_builder import PaperCorpusBuilder
+from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from learning_to_rank import LearningToRank
 from pyspark.sql.types import *
 
 class FoldSplitter:
     """
-    Class that contains functionality to split data frame into folds based on its "timestamp" column. Each fold consist of training and test data frame.
+    Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
+    When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
-    # TODO write comments
-    def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", store=True):
+
+    @classmethod
+    def split_into_folds(history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+                         citeulikePaperId_col="citeulike_paper_id", store=True):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least recent date. 
@@ -24,7 +27,7 @@ class FoldSplitter:
         :param data_frame: data frame that will be split. The timestamp_col has to be present.
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame.
-        :param store
+        :param store: True if the folds have to be stored. See Fold class for more information how the folds are stored.
         :return: list of folds. Each fold is an object Fold. 
         """
         asc_data_frame = history.orderBy(timestamp_col)
@@ -37,13 +40,13 @@ class FoldSplitter:
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
-            fold = self.extract_fold(history, fold_end_date, period_in_months)
+            fold = FoldSplitter.extract_fold(history, fold_end_date, period_in_months)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
             # build the corpus for the fold, it includes all papers published til the end of the fold
-            fold_paper_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
-            fold.set_paper_corpus(fold_paper_corpus)
+            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
+            fold.set_papers_corpus(fold_papers_corpus)
             # store the fold
             if(store):
                 fold.store()
@@ -55,7 +58,8 @@ class FoldSplitter:
             fold_index += 1
         return folds
 
-    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp"):
+    @classmethod
+    def extract_fold(data_frame, end_date, period_in_months, timestamp_col="timestamp"):
         """
         Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
         For example, if you have rows with timestamps in interval [2004-11-04, 2011-11-12] in the "data_frame", end_date is 2008-09-29 
@@ -87,20 +91,24 @@ class FoldSplitter:
 
 class Fold:
     """
-    Encapsulates the notion of a fold. Each fold consists of training and test data frame. Each fold has an index which indicated 
+    Encapsulates the notion of a fold. Each fold consists of training, test data frame and papers corpus. Each fold has an index which indicated 
     its position in the sequence of all extracted folds. The index starts from 1. Each fold is extracted based on the timestamp of 
     the samples. The samples in the test set are from a particular period in time. For example, the test_set can contains samples from
     [2008-09-29, 2009-03-29] and the training_set from [2004-11-04, 2008-09-28]. Important note is that the test set starts when the training 
     set ends. The samples are sorted by their timestamp column. Therefore, additional information for each fold is when the test set starts and ends. 
-    Respectively the same for the training set. Also, the duration of the test set - period_in_months.
+    Respectively the same for the training set. Also, the duration of the test set - period_in_months.  Papers corpus for each fold contains all the papers 
+    published before the end date of a test set in the fold.
     """
-    # TODO write comments
+
+    """ Name of the file in which test data frame of the fold is stored. """
     TEST_DF_CSV_FILENAME = "test.csv"
+    """ Name of the file in which training data frame of the fold is stored. """
     TRAINING_DF_CSV_FILENAME = "training.csv"
+    """ Name of the file in which papers corpus of the fold is stored. """
     PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
+    """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "fold-"
 
-    # TODO write comments
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
         self.training_data_frame = training_data_frame
@@ -109,13 +117,13 @@ class Fold:
         self.tr_start_date = None
         self.ts_end_date = None
         self.ts_start_date = None
-        self.paper_corpus = None
+        self.papers_corpus = None
 
     def set_index(self, index):
         self.index = index
 
-    def set_paper_corpus(self, paper_corpus):
-        self.paper_corpus = paper_corpus
+    def set_papers_corpus(self, papers_corpus):
+        self.papers_corpus = papers_corpus
 
     def set_period_in_months(self, period_in_months):
         self.period_in_months = period_in_months
@@ -129,8 +137,13 @@ class Fold:
     def set_training_set_start_date(self, tr_start_date):
         self.tr_start_date = tr_start_date
 
-    # TODO write comments
     def store(self):
+        """
+        For a fold, store its test data frame, training data frame and its papers corpus.
+        All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
+        of a fold. For example, for a fold with index 2, the stored information for it will be in
+        "fold-2" folder.
+        """
         # save test data frame
         self.test_data_frame.write.csv(
             Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TEST_DF_CSV_FILENAME)
@@ -144,17 +157,32 @@ class Fold:
 class FoldValidator():
     """
     Class that run all phases of the Learning To Rank algorithm on multiple folds. It divides the input data set based 
-    on a time slot. The FoldSplitter is used. Each fold contains test and training data set. The model is trained over 
-    the training set.Then the prediction over the test set is calculated and evaluated using BinaryClassificationEvaluator.
-    At the end, the result is averaged over all folds.
+    on a time slot into multiple folds. If they are already stored, before running the algorithm, they will be loaded. Otherwise sFoldSplitter will be used 
+    to extract and store them for later use. Each fold contains test, training data set and a papers corpus. The model is trained over the training set. 
+    Then the prediction over the test set is calculated. 
+    #TODO CONTINUE
     """
-    NUMBER_OF_FOLD = 0;
+
+    """ Total number of folds. """
+    NUMBER_OF_FOLD = 23;
 
     def __init__(self, bag_of_words, k=10,
                  pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence"):
-        # TODO write comments
-        self.paperId_Col = paperId_col
+        """
+        Construct FoldValidator object.
+        
+        :param bag_of_words:(dataframe) bag of words representation for each paper. Format (paperId_col, tf_map_col)
+        :param k: the number of peer papers that will be sampled per paper. See LearningToRank 
+        :param pairs_generation: duplicated_pairs, one_class_pairs, equally_distributed_pairs. See LearningToRank
+        :param paperId_col: name of a column that contains identifier of each paper
+        :param citeulikePaperId_col: name of a column that contains citeulike identifier of each paper
+        :param userId_col: name of a column that contains identifier of each user
+        :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the 
+        column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
+        in a particular paper.
+        """
+        self.paperId_col = paperId_col
         self.citeulikePaperId_col = citeulikePaperId_col
         self.k = k
         self.bag_of_words = bag_of_words
@@ -163,51 +191,77 @@ class FoldValidator():
         self.tf_map_col = tf_map_col
         self.folds_evaluation = {}
 
-    #TODO write comments
-    def evaluate_on_folds(self):
+    def evaluate_folds(self, spark):
+        """
+        Load each fold, run LTR on it and evaluate its predictions.
+        # TODO continue it when the method is finished.
+        
+        :param spark: spark instance used for loading the folds
+        """
         # load folds one by one and evaluate on them
         # total number of fold  - 23
         for i in range(1, FoldValidator.NUMBER_OF_FOLD):
-            fold = self.load_fold(i)
-            fold.test_data_frame.show()
-
+            fold = self.load_fold(spark, i)
             # train a model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_Col,
-                                              tf_map_col=self.tf_map_col, output_tf_col="paper_tf_vector")
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            ltr = LearningToRank(fold.paper_corpus, tfidfModel, pairs_generation="equally_distributed", k=10,
+            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", k=10,
                                  paperId_col="paper_id",
-                                 userId_col="user_id", features_col="features", label_col="label")
-            lsvcModel = ltr.fit(fold.training_data_frame)
+                                 userId_col="user_id", features_col="features")
+            training_data_frame = fold.training_data_frame
+            lsvcModel = ltr.fit(training_data_frame)
 
+            training_data_frame.show()
             # predict for each fold
             # TODO CONTINUE
 
 
-    # TODO WRITE COMMENTS
-    def evaluate_on_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
+    def evaluate(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
+        """
+        Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
+        papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
+        of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
+        A LTR algorithm is run over each fold.
+        # TODO continue it when the method is finished.
+        
+        :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
+        citeulikePaperId_col, userId_col
+        :param papers: data frame that contains all papers. Its used column is citeulikePaperId_col.
+        :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
+        :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
+        :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame
+        """
         # creates all splits
-        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
-                                                paperId_col = self.paperId_Col, citeulikePaperId_col = self.citeulikePaperId_col, store=True)
-        FoldValidator.NUMBER_OF_FOLD = len(folds)
+        folds = FoldSplitter.split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
+                                                paperId_col = self.paperId_col, citeulikePaperId_col = self.citeulikePaperId_col, store=True)
         for fold in folds:
-            #train a model using term_occurrences of each paper and paper corpus
+            # train a model using term_occurrences of each paper and paper corpus
             tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_Col,
-                                            tf_map_col=self.tf_map_col, output_tf_col="paper_tf_vector")
+                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            ltr = LearningToRank(fold.paper_corpus, tfidfModel, pairs_generation="equally_distributed", k=10, paperId_col="paper_id",
-                 userId_col="user_id", features_col="features", label_col="label")
-            lsvcModel = ltr.fit(fold.training_data_frame)
+            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", k=10,
+                                 paperId_col="paper_id",
+                                 userId_col="user_id", features_col="features")
+            training_data_frame = fold.training_data_frame
+            lsvcModel = ltr.fit(training_data_frame)
 
+            training_data_frame.show()
             # predict for each fold
-            #TODO CONTINUE
+            # TODO CONTINUE
 
-    # TODO write comments
-    def load(self, index):
-        fold = Fold()
-        fold.index = index
+    def load_fold(self, spark, fold_index):
+        """
+        Load a fold based on its index. Loaded fold which contains test data frame, training data frame and papers corpus.
+        Structure of test and training data frame - (citeulike_paper_id, citeulike_user_hash, timestamp, user_id, paper_id)
+        Structure of papers corpus - (citeulike_paper_id, paper_id)
+        
+        :param spark: spark instance used for loading
+        :param fold_index: index of a fold that used for identifying its location
+        :return: loaded fold which contains test data frame, training data frame and papers corpus.
+        """
         # (name, dataType, nullable)
         fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
                                   StructField("citeulike_user_hash", StringType(), False),
@@ -215,19 +269,21 @@ class FoldValidator():
                                   StructField("user_id", IntegerType(), False),
                                   StructField("paper_id", IntegerType(), False)])
         # load test data frame
-        fold.test_data_frame = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + "/" + Fold.TEST_DF_CSV_FILENAME, header=False,
+        test_data_frame = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME, header=False,
                                               schema=fold_schema)
         # load training data frame
-        fold.training_data_frame = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + "/" + Fold.TRAINING_DF_CSV_FILENAME,
+        training_data_frame = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME,
                                                   header=False, schema=fold_schema)
 
+        fold = Fold(training_data_frame, test_data_frame)
+        fold.index = fold_index
         # (name, dataType, nullable)
         paper_corpus_schema = StructType([StructField("citeulike_paper_id", StringType(), False), StructField("paper_id", IntegerType(), False)])
-        # load training data frame
-        fold.papers_corpus.papers = self.spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(index) + + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME,
-                                                       header=False, schema=paper_corpus_schema)
-        fold.paper_corpus.paperId_col = "paper_id"
-        fold.paper_corpus.citeulikePaperId_col = "citeulike_paper_id"
+        # load papers corpus
+        papers = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME,
+            header=False, schema=paper_corpus_schema)
+        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+        return fold
 
 
 class FoldStatisticsWriter:

@@ -11,7 +11,7 @@ class TFVectorizer(Estimator):
     of a paper is built.
     """
 
-    def __init__(self, papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_tf_col="tf_vector"):
+    def __init__(self, papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_col="tf_vector"):
         """
         Create an instance of the class.
         
@@ -21,7 +21,7 @@ class TFVectorizer(Estimator):
         :param tf_map_col name of the tf representation column in the input data frame of fit(). The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
-        :param output_tf_col the name of the column in which the produced result is stored - tf vector of a paper
+        :param output_col the name of the column in which the produced result is stored - tf vector of a paper
         """
         self.papers_corpus = papers_corpus
         # data frame for a mapping between term_id and sequantial id based on all terms in the corpus
@@ -30,7 +30,7 @@ class TFVectorizer(Estimator):
         self.term_corpus = None
         self.paperId_col= paperId_col
         self.tf_map_col = tf_map_col
-        self.output_tf_col = output_tf_col
+        self.output_col = output_col
 
     def setPaperIdCol(self, paperId_col):
         self.paperId_col = paperId_col
@@ -38,8 +38,8 @@ class TFVectorizer(Estimator):
     def setTFMapCol(self, tf_map_col):
         self.tf_map_col = tf_map_col
 
-    def setOutputTFCol(self, output_tf_col):
-        self.output_tf_col
+    def setOutputTFCol(self, output_col):
+        self.output_col
 
     def _fit(self, papers):
         """
@@ -73,38 +73,38 @@ class TFVectorizer(Estimator):
         indexed_exploded_papers = indexed_exploded_papers.groupby(self.paperId_col).agg(F.collect_list(F.struct("id", "value")).alias("term_occurrence"))
         voc_size = terms.count()
 
-        dataset = indexed_exploded_papers.withColumn(self.output_tf_col, UDFContainer.getInstance().to_tf_vector_udf("term_occurrence", F.lit(voc_size)))
+        dataset = indexed_exploded_papers.withColumn(self.output_col, UDFContainer.getInstance().to_tf_vector_udf("term_occurrence", F.lit(voc_size)))
 
-        paper_profiles = dataset.select(self.paperId_col, self.output_tf_col)
-        return TFVectorizorModel(paper_profiles, self.paperId_col, self.output_tf_col);
+        paper_profiles = dataset.select(self.paperId_col, self.output_col)
+        return TFVectorizorModel(paper_profiles, self.paperId_col, self.output_col);
 
 class TFVectorizorModel(Transformer):
     """
     Class that add a tf vector representation to each paper based on @paperId_col
     """
 
-    def __init__(self, paper_profiles, paperId_col = "paper_id", output_tf_col="tf_vector"):
+    def __init__(self, paper_profiles, paperId_col = "paper_id", output_col="tf_vector"):
         """
         Build a tf-vectorizer model. It adds a tf-vector representation to each paper based on its paper id.
-        It is stored in paperId_col. The result the model produces is stored in output_tf_col.
+        It is stored in paperId_col. The result the model produces is stored in output_col.
         
         :param paper_profiles: a data frame that contains a tf profile of each paper
         :param paperId_col: name of the paper id column in the input data set of transform()
-        :param output_tf_col: name of the result column that the model produces
+        :param output_col: name of the result column that the model produces
         """
         # format (paper_id, tf_vector)
         self.paper_profiles = paper_profiles
         self.paperId_col = paperId_col
-        self.output_tf_col = output_tf_col
+        self.output_col = output_col
 
-    def setOutputTfCol(self, output_tf_col):
+    def setOutputTfCol(self, output_col):
         """
         Change the name of the column in which the result of the transform operation is stored. 
         
-        :param output_tf_col: new name of the result column that the model produces
+        :param output_col: new name of the result column that the model produces
         """
-        self.paper_profiles = self.paper_profiles.withColumnRenamed(self.output_tf_col, output_tf_col)
-        self.output_tf_col = output_tf_col
+        self.paper_profiles = self.paper_profiles.withColumnRenamed(self.output_col, output_col)
+        self.output_col = output_col
 
     def setPaperIdCol(self, paperId_col):
         """
@@ -121,7 +121,7 @@ class TFVectorizorModel(Transformer):
         Add for each paper, its corresponding tf vector.
         
         :param dataset: input data with a column paperId_col. Based on it, a tf vector for each paper is added.
-        :return: data frame with additional column output_tf_col
+        :return: data frame with additional column output_col
         """
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
@@ -133,7 +133,7 @@ class TFIDFVectorizer(Estimator):
     of a paper is built.
     """
 
-    def __init__(self, papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_tf_idf_col="tf_idf_vector"):
+    def __init__(self, papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_col="tf_idf_vector"):
         """
         Create an instance of the class.
 
@@ -142,7 +142,7 @@ class TFIDFVectorizer(Estimator):
         :param tf_map_col name of the tf representation column in the input data frame of fit(). The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
-        :param output_tf_idf_col the name of the column in which the produced result is stored - tf-idf vector of a paper
+        :param output_col the name of the column in which the produced result is stored - tf-idf vector of a paper
         """
         self.papers_corpus = papers_corpus
         # data frame for a mapping between term_id and sequantial id based on all terms in the corpus
@@ -151,7 +151,7 @@ class TFIDFVectorizer(Estimator):
         self.term_corpus = None
         self.paperId_col = paperId_col
         self.tf_map_col = tf_map_col
-        self.output_tf_idf_col = output_tf_idf_col
+        self.output_col = output_col
 
     def _fit(self, papers):
         """
@@ -193,12 +193,12 @@ class TFIDFVectorizer(Estimator):
             F.collect_list(F.struct("indexed_term_id", "tf", "df")).alias("term_occurrence"))
 
         voc_size = terms.count()
-        papers_corpus_size = self.papers_corpus.count()
-        dataset = indexed_exploded_papers.withColumn(self.output_tf_idf_col,
+        papers_corpus_size = self.papers_corpus.papers.count()
+        dataset = indexed_exploded_papers.withColumn(self.output_col,
                                                      UDFContainer.getInstance().to_tf_idf_vector_udf("term_occurrence",
                                                                                                   F.lit(voc_size), F.lit(papers_corpus_size)))
-        paper_profiles = dataset.select(self.paperId_col, self.output_tf_idf_col)
-        return TFIDFVectorizorModel(paper_profiles, self.paperId_col, self.output_tf_idf_col);
+        paper_profiles = dataset.select(self.paperId_col, self.output_col)
+        return TFIDFVectorizorModel(paper_profiles, self.paperId_col, self.output_col);
 
 
 class TFIDFVectorizorModel(Transformer):
@@ -206,28 +206,28 @@ class TFIDFVectorizorModel(Transformer):
     Class that add a tf-idf vector representation to each paper based on paperId_col.
     """
     
-    def __init__(self, paper_profiles, paperId_col="paper_id", output_tf_idf_col="tf_idf_vector"):
+    def __init__(self, paper_profiles, paperId_col="paper_id", output_col="tf_idf_vector"):
         """
         Build a tfidf-vectorizer model. It adds a tfidf-vector representation to each paper based on its paper id.
-        It is stored in paperId_col. The result the model produces is stored in output_tf_idf_col.
+        It is stored in paperId_col. The result the model produces is stored in output_col.
 
         :param paper_profiles: a data frame that contains a tf profile of each paper
         :param paperId_col: name of the paper id column in the input data set of transform()
-        :param output_tf_idf_col: name of the result column that the model produces
+        :param output_col: name of the result column that the model produces
         """
         # format (paper_id, tf_idf_vector)
         self.paper_profiles = paper_profiles
         self.paperId_col = paperId_col
-        self.output_tf_idf_col = output_tf_idf_col
+        self.output_col = output_col
 
-    def setOutputTfIdfCol(self, output_tf_idf_col):
+    def setOutputCol(self, output_col):
         """
         Change the name of the column in which the result of the transform operation is stored. 
 
-        :param output_tf_idf_col: new name of the result column that the model produces
+        :param output_col: new name of the result column that the model produces
         """
-        self.paper_profiles = self.paper_profiles.withColumnRenamed(self.output_tf_idf_col, output_tf_idf_col)
-        self.output_tf_idf_col = output_tf_idf_col
+        self.paper_profiles = self.paper_profiles.withColumnRenamed(self.output_col, output_col)
+        self.output_col = output_col
 
     def setPaperIdCol(self, paperId_col):
         """
@@ -244,7 +244,7 @@ class TFIDFVectorizorModel(Transformer):
         Add for each paper, its corresponding tf-idf vector.
 
         :param dataset: input data with a column paperId_col. Based on it, a tf-idf vector for each paper is added.
-        :return: data frame with additional column output_tf_idf_col
+        :return: data frame with additional column output_col
         """
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
