@@ -24,6 +24,7 @@ class UDFContainer():
         self.mrr_per_user = F.udf(UDFContainer.__mrr_per_user, DoubleType())
         self.ndcg_per_user = F.udf(UDFContainer.__ndcg_per_user, DoubleType())
         self.recall_per_user = F.udf(UDFContainer.__recall_per_user, DoubleType())
+        self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user,ArrayType(IntegerType(), False))
 
     @staticmethod
     def getInstance():
@@ -94,6 +95,20 @@ class UDFContainer():
         label 0.
         """
         return self.split_papers(papers_id_list)
+
+    def get_candidate_set_per_user_udf(self, total_predicted_papers, training_paper, k):
+        """
+        From a list of best predicted papers(k + max. number of papers for a user in the training set),
+        remove those which a user already liked and they are included in the training set.
+
+        :param total_predicted_papers list of tuples. Each contains (paper_id, prediction). Not sorted.
+        Represents top predicted papers
+        :param training_paper: all paper ids that are part of liked papers by a used in the training set
+        :param k: how many top predictions have to be returned
+        :return: top k predicted papers for a user
+        """
+        return self.get_candidate_set_per_user(total_predicted_papers, training_paper, k)
+
 
     def mrr_per_user_udf(self, predicted_papers, test_papers):
         """
@@ -231,6 +246,23 @@ class UDFContainer():
         positive_class_set = papers_id_list[:ratio]
         negative_class_set = papers_id_list[ratio:]
         return [positive_class_set, negative_class_set]
+
+    def __get_candidate_set_per_user(total_predicted_papers, training_paper, k):
+        """
+        From a list of best predicted papers(k + max. number of papers for a user in the training set),
+        remove those which a user already liked and they are included in the training set.
+        
+        :param total_predicted_papers list of tuples. Each contains (paper_id, prediction). Not sorted.
+        Represents top predicted papers
+        :param training_paper: all paper ids that are part of liked papers by a used in the training set
+        :param k: how many top predictions have to be returned
+        :return: top k predicted papers for a user
+        """
+        # sort by prediction
+        sorted_prediction_papers = sorted(total_predicted_papers, key=lambda tup: -tup[1])
+        training_paper_set = set(training_paper)
+        filtered_sorted_prediction_papers = [(x,y) for x, y in sorted_prediction_papers if x not in training_paper_set]
+        return filtered_sorted_prediction_papers[:k]
 
     def __mrr_per_user(predicted_papers, test_papers):
         """
