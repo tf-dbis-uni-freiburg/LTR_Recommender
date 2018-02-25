@@ -6,13 +6,13 @@ from pyspark.sql.window import Window
 from pyspark.ml.base import Transformer
 
 
-class LearningToRank(Estimator):
+class LearningToRank(Estimator, Transformer):
     """
     Class that implements different approaches of learning to rank algorithms. 
     Learning to Rank algorithm includes 3 phases:
     1) peers extraction - for each paper p in the data set, k peer papers are extracted. In the current implementation,
     peer papers are extracted randomly from {paper_corpus}\{papers liked by the same user who liked p}. If paper p is liked by
-    many users, for each pair (user,p) will be extracted k peer papers to p and the user's library will be removed from the 
+    many users, for each pair (user,p) will be extracted peer_papers_count peer papers to p and the user's library will be removed from the 
     possible set of papers used.
     2) Before phase 2, a model that can produce a representation for each paper is used. For example, TFIDFVectorizorModel can add a tf-idf vector
     based on input paper id. Such a model is used for adding a representation for each paper and its peer papers. After each pair (paper_vector, peer_paper_vector)
@@ -28,7 +28,7 @@ class LearningToRank(Estimator):
     of SVM (Support Vector Machines) is supported. When the model is trained it can be used for predictions.
     """
 
-    def __init__(self, papers_corpus, paper_profiles_model, pairs_generation="equally_distributed_pairs", k=10, paperId_col="paper_id",
+    def __init__(self, papers_corpus, paper_profiles_model, pairs_generation="equally_distributed_pairs", peer_papers_count=10, paperId_col="paper_id",
                  userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.
@@ -51,7 +51,7 @@ class LearningToRank(Estimator):
         3) if it is "equally_distributed_pairs" - for 50% of papers in the set N, calculate p - p_p, class:1), 
         and for the other 50% (p_p - p, class: 0)
         
-        :param k: Used in the first phase of the algorithm. It represents the number of peer papers that will 
+        :param peer_papers_count: Used in the first phase of the algorithm. It represents the number of peer papers that will 
         be sampled per paper
         
         :param paperId_col: name of a column that contains identifier of each paper in the input dataset
@@ -61,10 +61,11 @@ class LearningToRank(Estimator):
         self.papers_corpus = papers_corpus
         self.paper_profiles_model = paper_profiles_model
         self.pairs_generation = pairs_generation
-        self.k = k
+        self.peer_papers_count = peer_papers_count
         self.paperId_col = paperId_col
         self.userId_col = userId_col
         self.features_col = features_col
+        self.model = None
 
     def _fit(self, dataset):
         """
@@ -74,7 +75,7 @@ class LearningToRank(Estimator):
         :return: a trained learning-to-rank model that can be used for predictions
         """
         # 1) Peer papers sampling
-        nps = PeerPapersSampler(self.papers_corpus, self.k, paperId_col=self.paperId_col, userId_col=self.userId_col,
+        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col, userId_col=self.userId_col,
                                     output_col="peer_paper_id")
         dataset = nps.transform(dataset)
 
@@ -103,7 +104,26 @@ class LearningToRank(Estimator):
                          labelCol="label")
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
-        return lsvcModel
+        self.model = lsvcModel
+
+    def _transform(self, dataset):
+        """
+        Add prediction to each paper in the input data set based on the trained model and its features vector.
+        
+        :param dataset: paper profiles
+        :return: dataset with predictions - column "prediction"
+        """
+        self.paper_profiles_model.setPaperIdCol(self.paperId_col)
+        self.paper_profiles_model.setOutputCol(self.features_col)
+
+        # add paper representaion to each paper in the corpus
+        papers_corpus = self.paper_profiles_model.transform(dataset)
+
+        # make predictions using the model over full papers corpus
+        papers_corpus_predictions = self.model.transform(papers_corpus)
+
+        return papers_corpus_predictions
+
 
 class PeerPapersSampler(Transformer):
     """
@@ -111,17 +131,17 @@ class PeerPapersSampler(Transformer):
     The peer papers are selected randomly.
     """
 
-    def __init__(self, papers_corpus, k, paperId_col="paper_id", userId_col="user_id", output_col="peer_paper_id"):
+    def __init__(self, papers_corpus, peer_papers_count, paperId_col="paper_id", userId_col="user_id", output_col="peer_paper_id"):
         """
         :param papers_corpus: PaperCorpus object that contains data frame. It represents all papers from the corpus. 
         Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information.
-        :param k: number of peer papers that will be sampled per paper
+        :param peer_papers_count: number of peer papers that will be sampled per paper
         :param paperId_col name of the paper id column in the input data frame of transform()
         :param userId_coln name of the user id column in the input data frame of transform()
         :param output_col the name of the column in which the produced result is stored
         """
         self.papers_corpus = papers_corpus
-        self.k = k
+        self.peer_papers_count = peer_papers_count
         self.paperId_col = paperId_col
         self.userId_col = userId_col
         self.output_col = output_col
@@ -164,7 +184,7 @@ class PeerPapersSampler(Transformer):
         # generate peer papers
         dataset = dataset.withColumn("indexed_peer_papers_per_user", UDFContainer.getInstance()
                                      .generate_peers_udf("indexed_positive_papers_per_user", F.lit(total_papers_count),
-                                                         F.lit(self.k)))
+                                                         F.lit(self.peer_papers_count)))
 
         # drop columns that we have added
         dataset = dataset.drop("indexed_positive_papers_per_user")

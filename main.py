@@ -34,18 +34,17 @@ history = history.join(user_mappings, "citeulike_user_hash", "inner")
 
 # map citeulike_paper_id to paper_id
 history = history.join(papers_mapping, "citeulike_paper_id", "inner")
-
+#
 # Loading bag of words for each paper
 # format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
-
-fold_validator = FoldValidator(bag_of_words, k=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+#
+fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence")
-# if you want to store folds
-#fold_validator.evaluate_on_folds(history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
+fold_validator.evaluate_folds(spark)
 
 # if folds are already stored and we only load them
-fold_validator.evaluate_folds(spark)
+# fold_validator.evaluate_folds(spark)
 
 # splitter = FoldSplitter(spark)
 # #fold = splitter.extract_fold(history, datetime.datetime(2004, 11, 4), 6, timestamp_col="timestamp")
@@ -89,8 +88,5 @@ fold_validator.evaluate_folds(spark)
 # evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",
 #                  metricName="areaUnderROC")
 # metric = evaluator.evaluate(test_data_set_with_prediction)
-#
-# print(metric)
 
-# foldStatistics = FoldStatisticsWriter("statistics.txt")
-# sth = foldStatistics.statistics(fold)
+

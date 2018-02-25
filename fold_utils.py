@@ -1,9 +1,9 @@
 from dateutil.relativedelta import relativedelta
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from learning_to_rank import LearningToRank
 from pyspark.sql.types import *
+import math
 
 class FoldSplitter:
     """
@@ -12,7 +12,7 @@ class FoldSplitter:
     """
 
     @classmethod
-    def split_into_folds(history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+    def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
                          citeulikePaperId_col="citeulike_paper_id", store=True):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
@@ -36,6 +36,7 @@ class FoldSplitter:
         end_date = desc_data_frame.first()[2]
         fold_index = 1
         folds = []
+        st_writer = FoldStatisticsWriter("statistics.txt")
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
@@ -59,7 +60,7 @@ class FoldSplitter:
         return folds
 
     @classmethod
-    def extract_fold(data_frame, end_date, period_in_months, timestamp_col="timestamp"):
+    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp"):
         """
         Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
         For example, if you have rows with timestamps in interval [2004-11-04, 2011-11-12] in the "data_frame", end_date is 2008-09-29 
@@ -85,7 +86,7 @@ class FoldSplitter:
         # construct the fold object
         fold = Fold(training_data_frame, test_data_frame)
         fold.set_period_in_months(period_in_months)
-        fold.set_test_set_end_date(test_set_start_date)
+        fold.set_test_set_start_date(test_set_start_date)
         fold.set_test_set_end_date(end_date)
         return fold
 
@@ -150,8 +151,8 @@ class Fold:
         # save training data frame
         self.training_data_frame.write.csv(
             Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TRAINING_DF_CSV_FILENAME)
-        # save paper coprus
-        self.paper_corpus.papers.write.csv(
+        # save paper corpus
+        self.papers_corpus.papers.write.csv(
             Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME)
 
 class FoldValidator():
@@ -166,14 +167,13 @@ class FoldValidator():
     """ Total number of folds. """
     NUMBER_OF_FOLD = 23;
 
-    def __init__(self, bag_of_words, k=10,
-                 pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence"):
         """
         Construct FoldValidator object.
         
-        :param bag_of_words:(dataframe) bag of words representation for each paper. Format (paperId_col, tf_map_col)
-        :param k: the number of peer papers that will be sampled per paper. See LearningToRank 
+        :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
+        :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank 
         :param pairs_generation: duplicated_pairs, one_class_pairs, equally_distributed_pairs. See LearningToRank
         :param paperId_col: name of a column that contains identifier of each paper
         :param citeulikePaperId_col: name of a column that contains citeulike identifier of each paper
@@ -184,7 +184,7 @@ class FoldValidator():
         """
         self.paperId_col = paperId_col
         self.citeulikePaperId_col = citeulikePaperId_col
-        self.k = k
+        self.peer_papers_count = peer_papers_count
         self.bag_of_words = bag_of_words
         self.pairs_generation = pairs_generation
         self.userId_col = userId_col
@@ -193,7 +193,7 @@ class FoldValidator():
 
     def evaluate_folds(self, spark):
         """
-        Load each fold, run LTR on it and evaluate its predictions.
+        Load each fold, run LTR on it and evaluate its predictions. Then calculate mrr, recall and ndcg per user in the each fold.
         # TODO continue it when the method is finished.
         
         :param spark: spark instance used for loading the folds
@@ -207,24 +207,87 @@ class FoldValidator():
                                               tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", k=10,
+            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
                                  paperId_col="paper_id",
                                  userId_col="user_id", features_col="features")
             training_data_frame = fold.training_data_frame
-            lsvcModel = ltr.fit(training_data_frame)
+            ltr.fit(training_data_frame)
+            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
 
-            training_data_frame.show()
-            # predict for each fold
-            # TODO CONTINUE
+            # # papers_corpus_with_predictions.write.save("prediction/svm_predictions.parquet")
+            # papers_corpus_with_predictions = spark.read.load("prediction/svm_predictions.parquet")
 
+            # discard columns as features and rawPrediction
+            papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
+            evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
+
+    def idcg(self, best_k_papers):
+        """
+        IDCG which is calculated as a sum over top k best predicted papers. Independent of a user. Top k papers are sorted 
+        by prediction (DESC). Then, for each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+
+        :return: IDCG
+        """
+        # sort by prediction
+        sorted_best_k_papers = sorted(best_k_papers, key=lambda tup: -tup[1])
+        i = 1
+        sum = 0;
+        for paper_id, prediction in sorted_best_k_papers:
+            sum += (math.pow(2, prediction) - 1) / (math.log2(i + 1))
+            i += 1
+        return sum
+
+    def calculate_evaluation_metrics(self, top_k , papers_corpus_with_predictions, fold):
+        """
+        For each user in the test set, calculate its paper candidate set. It is {paper_corpus}/{training papers} for a user.
+        Based on the candidate set and user's test set of papers - calculate mrr@top_k, recall@top_k and ndcg@top_k.
+        
+        :param top_k: top k papers recommended for each user
+        :param papers_corpus_with_predictions: all papers in the corpus with their predictions. Format (paperId_col, "prediction")
+        :param fold: fold with training and test data sets 
+        :return: data frame that contains mrr, recall and ndcg column. They store calculation of these metrics per user
+        Format (user_id, mrr, recall, ndcg)
+        """
+        # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
+        training_user_library = fold.training_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("training_user_library"))
+        training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
+        max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
+
+        # take top k + max_training_library size
+        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(top_k + max_training_library)
+        top_papers_predictions = papers_corpus_with_predictions.groupBy().agg(F.collect_list(F.struct("paper_id", "prediction")).alias("predictions"))
+
+        # add the list of predictions to all selected predicted paper to each user
+        candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
+
+        # candidate_papers_per_user = candidate_papers_per_user.limit(1)
+        candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set", UDFContainer.getInstance().get_candidate_set_per_user_udf("predictions", "training_user_library", F.lit(top_k)))
+        candidate_papers_per_user = candidate_papers_per_user.select("user_id", "candidate_papers_set")
+
+        # add test user library to each user
+        test_user_library = fold.test_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("test_user_library"))
+        evaluation_per_user = test_user_library.join(candidate_papers_per_user, self.userId_col)
+
+        # add mrr
+        evaluation_per_user = evaluation_per_user.withColumn("mrr", UDFContainer.getInstance().mrr_per_user_udf("candidate_papers_set", "test_user_library"))
+
+        # add recall
+        evaluation_per_user = evaluation_per_user.withColumn("recall", UDFContainer.getInstance().recall_per_user_udf("candidate_papers_set", "test_user_library"))
+
+        # add ndcg
+        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(top_k)
+        top_k_papers_predictions = papers_corpus_with_predictions.rdd.map(lambda line: tuple([x for x in line])).collect()
+        idcg = self.idcg(top_k_papers_predictions)
+        evaluation_per_user = evaluation_per_user.withColumn("ndcg", UDFContainer.getInstance().ndcg_per_user_udf("candidate_papers_set", F.lit(idcg)))
+        return evaluation_per_user
 
     def evaluate(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
         of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
-        A LTR algorithm is run over each fold.
-        # TODO continue it when the method is finished.
+        A LTR algorithm is run over each fold. Then calculate mrr, recall and ndcg per user in the each fold.
+        TODO store the result
         
         :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
         citeulikePaperId_col, userId_col
@@ -234,23 +297,24 @@ class FoldValidator():
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame
         """
         # creates all splits
-        folds = FoldSplitter.split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
-                                                paperId_col = self.paperId_col, citeulikePaperId_col = self.citeulikePaperId_col, store=True)
+        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months)
         for fold in folds:
             # train a model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_Col,
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
 
-            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", k=10,
+            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
                                  paperId_col="paper_id",
                                  userId_col="user_id", features_col="features")
             training_data_frame = fold.training_data_frame
-            lsvcModel = ltr.fit(training_data_frame)
+            ltr.fit(training_data_frame)
+            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
+            # discard columns as features and rawPrediction
+            papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
 
-            training_data_frame.show()
-            # predict for each fold
-            # TODO CONTINUE
+            # calculate mrr, recall and NDCG based on top-10 papers
+            evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
 
     def load_fold(self, spark, fold_index):
         """
@@ -285,7 +349,6 @@ class FoldValidator():
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
         return fold
 
-
 class FoldStatisticsWriter:
     """
     Class that extracts statistics from different folds. For example, number of users in training set, test set and in total.
@@ -298,16 +361,24 @@ class FoldStatisticsWriter:
         :param filename: the name of the file in which the collected statistics will be written
         """
         self.filename = filename
-        file = open(filename, "w")
+        file = open(filename, "a")
         # write the header in the file
         file.write(
-            "fold_name | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems | #ratsTot | #ratsTR | #ratsTS | " +
-            "#PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | ")
+            "fold_index | fold_time | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems |"
+            " #ratsTot | #ratsTR | #ratsTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
         file.close()
 
     def statistics(self, fold, userId_col="user_id", paperId_col="paper_id"):
         """
-        Extract statistics from one fold. Each fold consists of test and training data. TODO write what kind of statistics are computed.
+        Extract statistics from one fold. Each fold consists of test and training data. 
+        Statistics that are computer for each fold:
+        1) #users in total, TR, TS
+        NOTE: new users, remove users in TS that are in TR
+        2) #items in total, TR, TS (with or without new items)
+        3) #ratings in total, TR, TS
+        4) #positive ratings per user - min/max/avg/std in TS/TR
+        5) #postive ratings per item - min/max/avg/std in TS/TR
+        
         At the end, write them in a file.
         
         :param fold: object that contains information about the fold. It consists of training data frame and test data frame. 
@@ -317,10 +388,9 @@ class FoldStatisticsWriter:
         """
         training_data_frame = fold.training_data_frame.select(paperId_col, userId_col)
         test_data_frame = fold.test_data_frame.select(paperId_col, userId_col)
-        fold_name = str(fold.tr_start_date) + "-" + str(fold.ts_start_date) + "-" + str(fold.ts_end_date)
         full_data_set = training_data_frame.union(test_data_frame)
 
-        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |"
+        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | \n"
 
         # ratings statistics
         total_ratings_count = full_data_set.count()
@@ -344,41 +414,46 @@ class FoldStatisticsWriter:
         new_items_count = tr_items.subtract(test_items).count()
 
         # ratings per user - min/max/avg/std in TR
-        # tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
-        # tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
-        # tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
-        # tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
-        # tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
+        tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
+        tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
+        tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
+        tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
+        tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
         #
         # # ratings per user - min/max/avg/std in TS
-        # ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
-        # ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
-        # ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
-        # ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
-        # ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
-        #
-        # # ratings per item - min/max/avg/std in TR
-        # tr_ratings_per_item = training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
-        # tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
-        # tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
-        # tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
-        # tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
-        #
-        # # ratings per item - min/max/avg/std in TR
-        # ts_ratings_per_item = test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
-        # ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
-        # ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
-        # ts_avg_ratings_per_item = ts_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
-        # ts_std_ratings_per_item = ts_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
+        ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
+        ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
+        ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
+        ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
+        ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
+
+        # ratings per item - min/max/avg/std in TR
+        tr_ratings_per_item = training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
+        tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
+        tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
+        tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
+        tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
+
+        # ratings per item - min/max/avg/std in TR
+        ts_ratings_per_item = test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
+        ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
+        ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
+        ts_avg_ratings_per_item = ts_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
+        ts_std_ratings_per_item = ts_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
 
         # write the collected statistics in a file
-        file = open(self.filename, "w")
-        formatted_line = line.format(fold_name, total_users_count, tr_users_count, test_users_count, new_users_count, \
+        file = open(self.filename, "a")
+        fold_time = str(fold.tr_start_date) + "-" + str(fold.ts_start_date) + "-" + str(fold.ts_end_date)
+        formatted_line = line.format(fold.index, fold_time, total_users_count, tr_users_count, test_users_count, new_users_count, \
                                      total_items_count, tr_items_count, test_items_count, new_items_count, \
-                                     total_ratings_count, tr_ratings_count, ts_ratings_count)  # , \
-        # tr_min_ratings_per_user + "/" + tr_max_ratings_per_user+ "/" + tr_avg_ratings_per_user + "/" + tr_std_ratings_per_user, \
-        # ts_min_ratings_per_user + "/" + ts_max_ratings_per_user + "/" + ts_avg_ratings_per_user + "/" + ts_std_ratings_per_user, \
-        # tr_min_ratings_per_item + "/" + tr_max_ratings_per_item + "/" + tr_avg_ratings_per_item + "/" + tr_std_ratings_per_item, \
-        # ts_min_ratings_per_item + "/" + ts_max_ratings_per_item + "/" + ts_avg_ratings_per_item + "/" + ts_std_ratings_per_item)
+                                     total_ratings_count, tr_ratings_count, ts_ratings_count, \
+                                     str(tr_min_ratings_per_user) + "/" + str(tr_max_ratings_per_user) +
+                                     "/" + "{0:.2f}".format(tr_avg_ratings_per_user) + "/" + "{0:.2f}".format(tr_std_ratings_per_user) \
+                                    , str(ts_min_ratings_per_user) + "/" + str(ts_max_ratings_per_user) + "/" +
+                                    "{0:.2f}".format(ts_avg_ratings_per_user) + "/" + "{0:.2f}".format(ts_std_ratings_per_user), \
+                                        str(tr_min_ratings_per_item) + "/" + str(tr_max_ratings_per_item) + "/" +
+                                     "{0:.2f}".format(tr_avg_ratings_per_item) + "/" + "{0:.2f}".format(tr_std_ratings_per_item), \
+                                    str(ts_min_ratings_per_item) + "/" + str(ts_max_ratings_per_item) + "/" +
+                                     "{0:.2f}".format(ts_avg_ratings_per_item) + "/" + "{0:.2f}".format(ts_std_ratings_per_item))
         file.write(formatted_line)
         file.close()

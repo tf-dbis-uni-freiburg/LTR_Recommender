@@ -24,7 +24,7 @@ class UDFContainer():
         self.mrr_per_user = F.udf(UDFContainer.__mrr_per_user, DoubleType())
         self.ndcg_per_user = F.udf(UDFContainer.__ndcg_per_user, DoubleType())
         self.recall_per_user = F.udf(UDFContainer.__recall_per_user, DoubleType())
-        self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user,ArrayType(IntegerType(), False))
+        self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
 
     @staticmethod
     def getInstance():
@@ -261,7 +261,7 @@ class UDFContainer():
         # sort by prediction
         sorted_prediction_papers = sorted(total_predicted_papers, key=lambda tup: -tup[1])
         training_paper_set = set(training_paper)
-        filtered_sorted_prediction_papers = [(x,y) for x, y in sorted_prediction_papers if x not in training_paper_set]
+        filtered_sorted_prediction_papers = [(float(x), float(y)) for x, y in sorted_prediction_papers if x not in training_paper_set]
         return filtered_sorted_prediction_papers[:k]
 
     def __mrr_per_user(predicted_papers, test_papers):
@@ -277,14 +277,14 @@ class UDFContainer():
         :return: mrr 
         """
         # sort by prediction
-        sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
+        sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
         test_papers_set = set(test_papers)
         index = 1
         for i, prediction in sorted_prediction_papers:
-            if (i in test_papers_set):
+            if (int(i) in test_papers_set):
                 return 1 / index
             index += 1
-        return 0
+        return 0.0
 
     def __recall_per_user(predicted_papers, test_papers):
         """
@@ -297,7 +297,7 @@ class UDFContainer():
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
         :return: recall
         """
-        predicted_papers = [x[0] for x in predicted_papers]
+        predicted_papers = [int(x[0]) for x in predicted_papers]
         hits = set(predicted_papers).intersection(test_papers)
         return len(hits) / len(test_papers)
 
@@ -320,7 +320,7 @@ class UDFContainer():
         sum = 0;
         for paper_id, prediction in sorted_prediction_papers:
             sum += prediction / (math.log2(i + 1))
-            i =+ 1
+            i += 1
         return  sum / normalization_factor
 
 class SparkBroadcaster():
