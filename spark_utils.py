@@ -7,6 +7,7 @@ from pyspark.sql.types import *
 from pyspark.ml.linalg import VectorUDT
 from random import randint, shuffle
 import math
+import scipy
 
 class UDFContainer():
     """
@@ -25,6 +26,7 @@ class UDFContainer():
         self.ndcg_per_user = F.udf(UDFContainer.__ndcg_per_user, DoubleType())
         self.recall_per_user = F.udf(UDFContainer.__recall_per_user, DoubleType())
         self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
+        self.calculate_prediction = F.udf(UDFContainer.__calculate_prediction, FloatType())
 
     @staticmethod
     def getInstance():
@@ -152,6 +154,17 @@ class UDFContainer():
         """
         return self.ndcg_per_user(predicted_papers, normalization_factor)
 
+    def calculate_prediction_udf(self, features, coefficients):
+        """
+        Calculate a score prediction for a paper. Multiple its features vector
+        with the coefficients received from the model.
+
+        :param features: sparse vector, features vector of a paper
+        :param coefficients: model coefficient, weights for each feature
+        :return: prediction score 
+        """
+        return self.calculate_prediction(features, coefficients)
+
     ### Private Functions ###
 
     def __build_publication_date(year, month):
@@ -204,20 +217,19 @@ class UDFContainer():
         From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
         The first is the term id. The second is the number of occurences, the term appears in a paper.
         
-        :param terms_mapping:
+        :param terms_mapping: a list of lists. Each sublist contains two elements.
         :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
         :return: sparse vector based on the input mapping. It is a tf representation of a paper
         """
         map = {}
         for term_id, term_occurrence in terms_mapping:
             map[term_id] = term_occurrence
-        # mapping of terms starts from 1, compensate with the length of the vector
-        return Vectors.sparse(voc_size + 1, map)
+        return Vectors.sparse(voc_size, map)
 
     def __to_tf_idf_vector(terms_mapping, terms_count, papers_count):
         """
         From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 3 values.
-        The first is the term id. The second is the number of occurences, the term appears in a paper - its
+        The first is the term id. The second is the number of occurrences, the term appears in a paper - its
         term frequence. The third is the number of papers the term appears - its document frequency.
 
         :param terms_mapping: a list of lists. Each sublist contains three elements.
@@ -229,8 +241,7 @@ class UDFContainer():
         for term_id, tf, df in terms_mapping:
             tf_idf = tf * math.log(papers_count/df, 2)
             map[term_id] = tf_idf
-        # mapping of terms starts from 1, compensate with the length of the vector
-        return Vectors.sparse(terms_count + 1, map)
+        return Vectors.sparse(terms_count, map)
 
     def __split_papers(papers_id_list):
         """
@@ -322,6 +333,22 @@ class UDFContainer():
             sum += prediction / (math.log2(i + 1))
             i += 1
         return  sum / normalization_factor
+
+    def __calculate_prediction(features, coefficients):
+        """
+        Calculate a score prediction for a paper. Multiple its features vector
+        with the coefficients received from the model.
+
+        :param features: sparse vector, features vector of a paper
+        :param coefficients: model coefficient, weights for each feature
+        :return: prediction score 
+        """
+        cx = scipy.sparse.coo_matrix(features)
+        prediction = 0.0
+        for index, value in zip(cx.col, cx.data):
+            prediction += value * coefficients[index]
+        return float(prediction)
+
 
 class SparkBroadcaster():
     """

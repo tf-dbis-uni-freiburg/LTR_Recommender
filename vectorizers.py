@@ -3,6 +3,7 @@ from pyspark.ml.base import Transformer
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window
 from spark_utils import UDFContainer
+from pyspark.sql.types import *
 
 class TFVectorizer(Estimator):
     """
@@ -60,15 +61,18 @@ class TFVectorizer(Estimator):
         exploded_papers = papers.select(self.paperId_col, F.explode(self.tf_map_col))
 
         # collect all distinct term ids
-        terms = exploded_papers.select("key").distinct()
+        terms = exploded_papers.select("key").distinct().withColumnRenamed("key", "term_id")
 
-        # generate sequential ids for terms
-        term_corpus = terms.withColumn('id', F.row_number().over(Window.orderBy("key")))
+        # generate sequential ids for terms, use zipWithIndex to generate ids starting from 0
+        # (name, dataType, nullable)
+        term_corpus_schema = StructType([StructField("term_id", IntegerType(), False),
+                                         StructField("id", IntegerType(), False)])
+        term_corpus = terms.rdd.zipWithIndex().map(lambda x: (int(x[0][0]), x[1])).toDF(term_corpus_schema)
         self.term_corpus = term_corpus
 
         # join term corpus with exploded papers to add new id for each term
         # format (key, paper_id, value, id)
-        indexed_exploded_papers = exploded_papers.join(term_corpus, "key")
+        indexed_exploded_papers = exploded_papers.join(term_corpus, "term_id")
         # collect (id, value) pairs into one list
         indexed_exploded_papers = indexed_exploded_papers.groupby(self.paperId_col).agg(F.collect_list(F.struct("id", "value")).alias("term_occurrence"))
         voc_size = terms.count()
@@ -175,8 +179,11 @@ class TFIDFVectorizer(Estimator):
         # collect all distinct term ids
         terms = exploded_papers.select("term_id").distinct()
 
-        # generate sequential ids for terms
-        term_corpus = terms.withColumn('indexed_term_id', F.row_number().over(Window.orderBy("term_id")))
+        # generate sequential ids for terms, use zipWithIndex to generate ids starting from 0
+        # (name, dataType, nullable)
+        term_corpus_schema = StructType([StructField("term_id", IntegerType(), False),
+                                     StructField("indexed_term_id", IntegerType(), False)])
+        term_corpus = terms.rdd.zipWithIndex().map(lambda x: (int(x[0][0]), x[1])).toDF(term_corpus_schema)
         self.term_corpus = term_corpus
 
         # add document frequency for each term
@@ -184,7 +191,7 @@ class TFIDFVectorizer(Estimator):
         exploded_papers = exploded_papers.join(term_document_frequency, "term_id")
 
         # join term corpus with exploded papers to add new id for each term
-        # format (key, paper_id, value, id)
+        # format (term_id, paper_id, tf, df, indexed_term_id)
         indexed_exploded_papers = exploded_papers.join(term_corpus, "term_id")
 
         # collect (id, tf, df) pairs into one list
