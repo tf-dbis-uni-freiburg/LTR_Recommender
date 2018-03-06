@@ -22,3 +22,22 @@ fold |          fold_time (st/mt/et)        | #UTot | #UTR | #UTS | #nU   | #ITo
 21   | 2004-11-04 - 2015-05-04 - 2015-11-04 | 27950 | 27671| 1267 | 26683 | 170901 | 170140 | 5659  | 165242 | 815209 | 807092 | 8117  | 1/1921/29.17/80.63    | 1/122/6.41/9.97       | 1/924/4.74/5.45       | 1/28/1.43/1.64        |
 22   | 2004-11-04 - 2015-11-04 - 2016-05-04 | 28219 | 27950| 1108 | 27111 | 171535 | 170901 | 4972  | 166563 | 822142 | 815209 | 6933  | 1/1921/29.17/80.77    | 1/86/6.26/10.17       | 1/924/4.77/5.46       | 1/10/1.39/0.90        |
 23   | 2004-11-04 - 2016-05-04 - 2016-11-04 | 28403 | 28219| 977  | 27426 | 172008 | 171535 | 4150  | 167858 | 828090 | 822142 | 5948  | 1/1921/29.13/80.89    | 1/103/6.09/10.31      | 1/924/4.79/5.47       | 1/29/1.43/1.05        |
+
+Agenda:
+fold - fold index
+fold_time (st/mt/et) -  the time fold expands over; start of the training set - end of the training set/start of the test set - end of the test set
+UTot - total number of users in the fold
+UTR - number of users in the training set of the fold
+UTS - number of users in the test set of the fold
+nU - new users that appear only in the test set
+ITot - total number of items(distinct ranked papers) in the fold
+ITR - number of items in the training set of the fold
+ITS -  number of items in the test set of the fold
+nI - new items that appear only in the test set
+RTot - total number of liked papers, total number of votes/likes users have given in the time of the fold
+RTR - total number of liked papers in the training set of the fold
+RTS - total number of liked papers in the test set of the fold
+PUTR min/max/avg/std - min/max/avg/std users in the training set
+PUTS min/max/avg/std - min/max/avg/std users in the test set
+PITR min/max/avg/std - min/max/avg/std items in the training set
+PITS min/max/avg/std - min/max/avg/std items in the test set
