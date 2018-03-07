@@ -12,22 +12,31 @@ class FoldSplitter:
     When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    @classmethod
     def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", store=True):
+                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", store=True):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
-        Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least recent date. 
-        Folds are constructed starting for the least recent extracted date. For example, the first fold will contain the rows
-        with timestamps in interval [the least recent date, the least recent extracted date + period_in_months] as its training set. The test set 
-        will contain the rows with timestamps in interval [the least recent date + period_in_months , the least recent date + 2 * period_in_months].
-        For the next fold we include the rows from the next "period_in_months" period. And again the rows from the last "period_in_months" period are 
-        included in the test set and everything else in the training set. 
-        Currently, in total 23 folds. Data in period [2004-11-04, 2016-11-11]. Last fold ends in 2016-11-04.
+        Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least 
+        recent date. Folds are constructed starting for the least recent extracted date. For example, the first fold will 
+        contain the rows with timestamps in interval [the least recent date, the least recent extracted date + period_in_months]
+        as its training set. The test set will contain the rows with timestamps in interval [the least recent date + 
+        period_in_months , the least recent date + 2 * period_in_months]. For the next fold we include the rows from the next
+        "period_in_months" period. And again the rows from the last "period_in_months" period are included in the test set 
+        and everything else in the training set. Currently, in total 23 folds. Data in period [2004-11-04, 2016-11-11].
+         Last fold ends in 2016-11-04.
         
-        :param data_frame: data frame that will be split. The timestamp_col has to be present.
+        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
+        Each row represents a time when a user likes a paper. The format of the data frame is
+        (user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_id)
+        :param papers: data frame that contains representation of all papers. It is used for building a paper corpus for 
+        a fold.
+        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids. 
         :param timestamp_col: the name of the timestamp column by which the splitting is done
-        :param period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame.
+        :param period_in_months: number of months that defines the time slot from which rows will be selected for the test 
+        and training data frame.
+        :param paperId_col: name of the column that stores paper ids in the input data frames
+        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
+        :param userId_col name of the column that stores user ids in the input data frames
         :param store: True if the folds have to be stored. See Fold class for more information how the folds are stored.
         :return: list of folds. Each fold is an object Fold. 
         """
@@ -42,7 +51,7 @@ class FoldSplitter:
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
-            fold = FoldSplitter.extract_fold(history, fold_end_date, period_in_months)
+            fold = FoldSplitter.extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
@@ -60,8 +69,7 @@ class FoldSplitter:
             fold_index += 1
         return folds
 
-    @classmethod
-    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp"):
+    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
         """
         Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
         For example, if you have rows with timestamps in interval [2004-11-04, 2011-11-12] in the "data_frame", end_date is 2008-09-29 
@@ -70,6 +78,7 @@ class FoldSplitter:
         Rows with timestamp before [end_date - period_in_months] are included in the training set.
         
         :param timestamp_col: the name of the timestamp column by which the splitting is done
+        :param userId_col name of the column that stores user ids in the input data frames
         :param data_frame: data frame from which the fold will be extracted. Because we filter based on timestamp, timestamp_col has to be present.
         :param end_date: the end date of the fold that has to be extracted
         :param period_in_months: what time duration will be the test set. Respectively, the training set.
@@ -86,10 +95,10 @@ class FoldSplitter:
         print(test_data_frame.count())
 
         # all distinct users in training data frame
-        user_ids = training_data_frame.select("user_id").distinct()
+        user_ids = training_data_frame.select(userId_col).distinct()
 
         # remove users that are new, part of the test data but not from the training data
-        test_data_frame = test_data_frame.join(user_ids, "user_id");
+        test_data_frame = test_data_frame.join(user_ids, userId_col);
 
         # construct the fold object
         fold = Fold(training_data_frame, test_data_frame)
