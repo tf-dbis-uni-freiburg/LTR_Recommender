@@ -4,6 +4,7 @@ from vectorizers import *
 from learning_to_rank import LearningToRank
 from pyspark.sql.types import *
 import math
+import scipy
 
 class FoldSplitter:
     """
@@ -82,6 +83,13 @@ class FoldSplitter:
         test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
             F.col(timestamp_col) <= end_date)
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
+        print(test_data_frame.count())
+
+        # all distinct users in training data frame
+        user_ids = training_data_frame.select("user_id").distinct()
+
+        # remove users that are new, part of the test data but not from the training data
+        test_data_frame = test_data_frame.join(user_ids, "user_id");
 
         # construct the fold object
         fold = Fold(training_data_frame, test_data_frame)
@@ -200,26 +208,40 @@ class FoldValidator():
         """
         # load folds one by one and evaluate on them
         # total number of fold  - 23
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD):
-            fold = self.load_fold(spark, i)
-            # train a model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+        for i in range(1,2): # FoldValidator.NUMBER_OF_FOLD):
+            # fold = self.load_fold(spark, i)
+            # # train a model using term_occurrences of each paper and paper corpus
+            # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+            #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+            # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            #
+            # ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
+            #                      paperId_col="paper_id",
+            #                      userId_col="user_id", features_col="features")
+            #
+            # model = ltr.fit(fold.training_data_frame)
+            #
+            # papers_corpus_with_predictions = ltr.transform(fold.test_data_frame) #.limit(10)
+            # papers_corpus_with_predictions.write.save("predictions.parquet")
+            papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+            # # add model coefficient to
+            # model_coefficients = spark.createDataFrame([(model.coefficients, )], ['coefficient'])
+            # papers_corpus_with_predictions = papers_corpus_with_predictions.crossJoin(model_coefficients)
+            #
+            # papers_corpus_with_predictions.show()
+            #
+            # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("prediction_score", UDFContainer.getInstance().calculate_prediction_udf("features", "coefficient"))
+            # papers_corpus_with_predictions.show()
+            vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
+            papers_corpus_with_predictions.describe()
 
-            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
-                                 paperId_col="paper_id",
-                                 userId_col="user_id", features_col="features")
-            training_data_frame = fold.training_data_frame
-            ltr.fit(training_data_frame)
-            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-
-            # # papers_corpus_with_predictions.write.save("prediction/svm_predictions.parquet")
-            # papers_corpus_with_predictions = spark.read.load("prediction/svm_predictions.parquet")
-
-            # discard columns as features and rawPrediction
-            papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
-            evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
+            papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("score_prediction", vector_udf("rawPrediction"))
+            papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("score_prediction")
+            papers_corpus_with_predictions.show()
+            # papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
+            # evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
+            # evaluations_per_user.show()
+            # self.store_results(evaluations_per_user, i)
 
     def idcg(self, best_k_papers):
         """
@@ -348,6 +370,37 @@ class FoldValidator():
             header=False, schema=paper_corpus_schema)
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
         return fold
+
+    def store_results(self, evaluations_per_user, fold_index):
+        # save evaluation per fold
+        evaluations_per_user.coalesce(1).write.csv(
+        Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + FoldEvaluationResultWriter.RESULTS_CSV_FILENAME)
+        # save average evaluation for this fold
+        # file = open(FoldEvaluationResultWriter.RESULTS_CSV_FILENAME, "a")
+
+
+class FoldEvaluationResultWriter:
+
+    """ Name of the file in which results are written. """
+    FOLD_RESULTS_CSV_FILENAME = "results.csv"
+    """ Name of the file in which results are written. """
+    RESULTS_CSV_FILENAME = "results.txt"
+
+
+    # def __init__(self):
+    #     file = open(filename, "a")
+    #     # write the header in the file
+    #     file.write(
+    #         "fold_index | fold_time | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems |"
+    #         " #ratsTot | #ratsTR | #ratsTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
+    #     file.close()
+
+    def store_results(self, evaluations_per_user, fold_index):
+        # save evaluation per fold
+        evaluations_per_user.coalesce(1).write.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + FoldEvaluationResultWriter.RESULTS_CSV_FILENAME)
+        # save average evaluation for this fold
+        # file = open(FoldEvaluationResultWriter.RESULTS_CSV_FILENAME, "a")
+
 
 class FoldStatisticsWriter:
     """
