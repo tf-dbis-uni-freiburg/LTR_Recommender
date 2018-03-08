@@ -39,8 +39,8 @@ history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
 fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence")
-fold_validator.evaluate(history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training="single_model_all_users")
+fold_validator.create_folds(history, papers, papers_mapping, statistics_file_name="statistics_wNU.txt" ,timestamp_col="timestamp", fold_period_in_months=6)
 
 # if folds are already stored and we only load them
 # fold_validator.evaluate_folds(spark)

@@ -1,6 +1,7 @@
 from pyspark.sql.types import *
-from paper_corpus_builder import *
+
 from fold_utils import Fold
+from paper_corpus_builder import *
 
 class Loader:
     """

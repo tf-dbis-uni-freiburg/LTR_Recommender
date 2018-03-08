@@ -157,19 +157,19 @@ class TFIDFVectorizer(Estimator):
         self.tf_map_col = tf_map_col
         self.output_col = output_col
 
-    def _fit(self, papers):
+    def _fit(self, bag_of_words):
         """
         Build a tf-idf representation for each paper in the input data set. Based on papers in the papers corpus, a set of all
         terms is extracted. For each of them a unique id is generated. Term ids are sequential. Then depending on all terms
         and their frequence for a paper, a sparse vector is built. A model that can be used to map a tf-idf vector to each paper 
         based on its paper id is returned.
 
-        :param dataset: input data set, which is an instance of :py:class:`pyspark.sql.DataFrame`
+        :param bag_of_words: input data set, which is an instance of :py:class:`pyspark.sql.DataFrame`
         :returns: a build model which can be used for transformation of a data set
         """
 
         # select only those papers that are part of the paper corpus
-        papers = papers.join(self.papers_corpus.papers, papers[self.paperId_col] == self.papers_corpus.papers[self.papers_corpus.paperId_col]).drop(papers[self.paperId_col])
+        papers = bag_of_words.join(self.papers_corpus.papers, bag_of_words[self.paperId_col] == self.papers_corpus.papers[self.papers_corpus.paperId_col]).drop(bag_of_words[self.paperId_col])
 
         # explode map with key:value pairs
         exploded_papers = papers.select(self.paperId_col, F.explode(self.tf_map_col))

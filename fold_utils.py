@@ -248,7 +248,8 @@ class FoldsUtils:
     @staticmethod
     def write_fold_statistics(folds, statistic_file_name):
         """
-        Compute statistics for each fold and store them in a file
+        Compute statistics for each fold and store them in a file.
+        
         :param folds: list of folds for which statistics will be computed and stored
         :param statistic_file_name: file to which collected statistics are written
         """
@@ -269,7 +270,7 @@ class FoldValidator():
     NUMBER_OF_FOLD = 23;
 
     def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence"):
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "single_model_all_users"):
         """
         Construct FoldValidator object.
         
@@ -282,6 +283,9 @@ class FoldValidator():
         :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
+        :param model_training: 
+        1) "model_per_user"
+        2) "single_model_all_users"
         """
         self.paperId_col = paperId_col
         self.citeulikePaperId_col = citeulikePaperId_col
@@ -291,6 +295,30 @@ class FoldValidator():
         self.userId_col = userId_col
         self.tf_map_col = tf_map_col
         self.folds_evaluation = {}
+        self.model_training = model_training
+
+    def create_folds(self, history, papers, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
+        """
+        Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
+        papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
+        of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
+
+        :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
+        citeulikePaperId_col, userId_col
+        :param papers: data frame that contains all papers. Its used column is citeulikePaperId_col.
+        :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
+        :param statistics_file_name TODO add
+        :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
+        :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame
+        """
+        # creates all splits
+        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
+                                                self.paperId_col,
+                                                self.citeulikePaperId_col, self.userId_col)
+        # store all folds
+        FoldsUtils.store_folds(folds)
+        # compute statistics for each fold and store it
+        FoldsUtils.write_fold_statistics(statistics_file_name)
 
     def evaluate_folds(self, spark):
         """
@@ -301,77 +329,28 @@ class FoldValidator():
         """
         # load folds one by one and evaluate on them
         # total number of fold  - 23
-        for i in range(1,2): # FoldValidator.NUMBER_OF_FOLD):
-            # fold = self.load_fold(spark, i)
-            # # train a model using term_occurrences of each paper and paper corpus
-            # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-            #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-            #
-            # ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
-            #                      paperId_col="paper_id",
-            #                      userId_col="user_id", features_col="features")
-            #
-            # model = ltr.fit(fold.training_data_frame)
-            #
-            # papers_corpus_with_predictions = ltr.transform(fold.test_data_frame) #.limit(10)
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD):
+            fold = Loader().load_fold(spark, i)
+
+            # train a tf idf model using term_occurrences of each paper and paper corpus
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
+                                 paperId_col="paper_id", userId_col="user_id", features_col="features", model_training=self.model_training)
+
+            ltr.fit(fold.training_data_frame)
+            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus)
+
+            # TODO only for testing
             # papers_corpus_with_predictions.write.save("predictions.parquet")
-            papers_corpus_with_predictions = spark.read.load("predictions.parquet")
-            # # add model coefficient to
-            # model_coefficients = spark.createDataFrame([(model.coefficients, )], ['coefficient'])
-            # papers_corpus_with_predictions = papers_corpus_with_predictions.crossJoin(model_coefficients)
-            #
-            # papers_corpus_with_predictions.show()
-            #
-            # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("prediction_score", UDFContainer.getInstance().calculate_prediction_udf("features", "coefficient"))
-            # papers_corpus_with_predictions.show()
+            # papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+
+            # evaluate
+
+            # extract the raw score for each row
             vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
-            papers_corpus_with_predictions.describe()
-
             papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("score_prediction", vector_udf("rawPrediction"))
-            papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("score_prediction")
-            papers_corpus_with_predictions.show()
-            # papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
-            # evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
-            # evaluations_per_user.show()
-            # self.store_results(evaluations_per_user, i)
-
-    def evaluate(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
-        """
-        Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
-        papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
-        of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
-        A LTR algorithm is run over each fold. Then calculate mrr, recall and ndcg per user in the each fold.
-        TODO store the result
-        
-        :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
-        citeulikePaperId_col, userId_col
-        :param papers: data frame that contains all papers. Its used column is citeulikePaperId_col.
-        :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
-        :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
-        :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame
-        """
-        # creates all splits
-        # TODO add these parameters up
-        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months, self.paperId_col,
-                         self.citeulikePaperId_col, self.userId_col, store=True)
-        # for fold in folds:
-        #     # train a model using term_occurrences of each paper and paper corpus
-        #     tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-        #                                       tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-        #     tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-        #
-        #     ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
-        #                          paperId_col="paper_id",
-        #                          userId_col="user_id", features_col="features")
-        #     training_data_frame = fold.training_data_frame
-        #     ltr.fit(training_data_frame)
-        #     papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-        #     # discard columns as features and rawPrediction
-        #     papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
-        #
-        #     # calculate mrr, recall and NDCG based on top-10 papers
-        #     evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
 
 class FoldEvaluator:
 

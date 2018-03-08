@@ -8,6 +8,8 @@ from pyspark.ml.base import Transformer
 
 class LearningToRank(Estimator, Transformer):
     """
+    TODO change comments - model training parameter added
+    
     Class that implements different approaches of learning to rank algorithms. 
     Learning to Rank algorithm includes 3 phases:
     1) peers extraction - for each paper p in the data set, k peer papers are extracted. In the current implementation,
@@ -28,11 +30,12 @@ class LearningToRank(Estimator, Transformer):
     of SVM (Support Vector Machines) is supported. When the model is trained it can be used for predictions.
     """
 
-    def __init__(self, papers_corpus, paper_profiles_model, pairs_generation="equally_distributed_pairs", peer_papers_count=10, paperId_col="paper_id",
+    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training="model_per_user",  pairs_generation="equally_distributed_pairs", peer_papers_count=10, paperId_col="paper_id",
                  userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.
         
+        :param spark TODO add
         :param papers_corpus: PapersCorpus object that contains data frame. It represents all papers from the corpus. 
         Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information. It is used
         during the first phase of the algorihtm when sampling of peer papers is done.
@@ -51,6 +54,10 @@ class LearningToRank(Estimator, Transformer):
         3) if it is "equally_distributed_pairs" - for 50% of papers in the set N, calculate p - p_p, class:1), 
         and for the other 50% (p_p - p, class: 0)
         
+        :param model_training: 
+        1) "model_per_user"
+        2) "single_model_all_users"
+        
         :param peer_papers_count: Used in the first phase of the algorithm. It represents the number of peer papers that will 
         be sampled per paper
         
@@ -58,6 +65,7 @@ class LearningToRank(Estimator, Transformer):
         :param userId_col: name of a column that contains identifier of each user in the input dataset
         :param features_col: the name of the column that contains the feature representation the model can predict on
         """
+        self.spark = spark
         self.papers_corpus = papers_corpus
         self.paper_profiles_model = paper_profiles_model
         self.pairs_generation = pairs_generation
@@ -65,20 +73,48 @@ class LearningToRank(Estimator, Transformer):
         self.paperId_col = paperId_col
         self.userId_col = userId_col
         self.features_col = features_col
-        self.model = None
+        self.model_training = model_training
+        # user_id, model per user
+        self.models = {}
 
     def _fit(self, dataset):
         """
-        The input dataset has to contains at least (paper, user) pairs. Each paper identifier is in paperId_col.
+        The input data set has to contains at least (paper, user) pairs. Each paper identifier is in paperId_col.
         Each user identifier is in userId_col. See class comments from more details about the functionality of the method.
+        TODO fix comments
         
         :return: a trained learning-to-rank model that can be used for predictions
         """
-        # 1) Peer papers sampling
-        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col, userId_col=self.userId_col,
-                                    output_col="peer_paper_id")
-        dataset = nps.transform(dataset)
+        # train multiple models, one for each user in the data set
+        if(self.model_training == "model_per_user"):
+            # extract all distinct users
+            distinct_user_ids = datetime.select(self.userId_col).distinct().collect()
 
+            # train model for each user, simply by for loop over all users
+            for userId in distinct_user_ids:
+                # select only records for particular user, only those papers liked by the current user
+                user_dataset = dataset.filter(self.userId_col == userId)
+                # Fit the model over full dataset and produce only one model for all users
+                user_lsvcModel = self.train_single_SVM_model(user_dataset)
+                # add the model for the user
+                self.models[userId] = user_lsvcModel
+            return self.models
+        elif(self.model_training == "single_model_all_users"):
+            # Fit the model over full dataset and produce only one model for all users
+            lsvcModel = self.train_single_SVM_model(dataset)
+            self.models[0] = lsvcModel
+            return self.models
+        else:
+            # throw an error - unsupported option
+            raise ValueError('The option' + self.model_training + ' is not supported.')
+
+    def train_single_SVM_model(self, dataset):
+        # TODO add comments
+        # 1) Peer papers sampling
+        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
+                                userId_col=self.userId_col,
+                                output_col="peer_paper_id")
+        dataset = nps.transform(dataset)
 
         # add tf paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
@@ -93,35 +129,55 @@ class LearningToRank(Estimator, Transformer):
         # 2) pair building
         # peer_paper_tf_idf_vector, paper_tf_idf_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
-                                                  peer_paperId_col="peer_paper_id",
-                                                  paper_vector_col=paper_output_column,
-                                                  peer_paper_vector_col="peer_paper_tf_idf_vector",
-                                                  output_col=self.features_col, label_col="label")
-
+                                              peer_paperId_col="peer_paper_id",
+                                              paper_vector_col=paper_output_column,
+                                              peer_paper_vector_col="peer_paper_tf_idf_vector",
+                                              output_col=self.features_col, label_col="label")
 
         dataset = papersPairBuilder.transform(dataset)
         lsvc = LinearSVC(maxIter=10, regParam=0.1, featuresCol=self.features_col,
                          labelCol="label")
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
-        self.model = lsvcModel
-        return self.model
+        return lsvcModel
 
-    def _transform(self, dataset):
+    def _transform(self, papers_corpus):
         """
         Add prediction to each paper in the input data set based on the trained model and its features vector.
         
         :param dataset: paper profiles
         :return: dataset with predictions - column "prediction"
         """
-        self.paper_profiles_model.setPaperIdCol(self.paperId_col)
-        self.paper_profiles_model.setOutputCol(self.features_col)
+        if(self.model_training == "model_per_user"):
+            papers_corpus_predictions = None
+            for userId, model in self.models:
 
-        # add paper representaion to each paper in the corpus
-        papers_corpus = self.paper_profiles_model.transform(dataset)
+                self.paper_profiles_model.setPaperIdCol(self.paperId_col)
+                self.paper_profiles_model.setOutputCol(self.features_col)
 
-        # make predictions using the model over full papers corpus
-        papers_corpus_predictions = self.model.transform(papers_corpus)
+                # add paper representaion to each paper in the corpus
+                papers_corpus = self.paper_profiles_model.transform(papers_corpus)
+                # make predictions using the model over full papers corpus
+                user_papers_corpus_predictions = model.transform(papers_corpus)
+                # add user id to each row to distinguish which model was used for these predictions
+                user_id_df = self.spark.createDataFrame([(userId)], [self.userId_col])
+                user_papers_corpus_predictions = user_papers_corpus_predictions.crossJoin(user_id_df)
+                # add predictions for a user to the final set of predictions
+
+                papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
+        elif (self.model_training == "single_model_all_users"):
+            model = self.models[0]
+            self.paper_profiles_model.setPaperIdCol(self.paperId_col)
+            self.paper_profiles_model.setOutputCol(self.features_col)
+
+            # add paper representaion to each paper in the corpus
+            papers_corpus = self.paper_profiles_model.transform(papers_corpus)
+
+            # make predictions using the model over full papers corpus
+            papers_corpus_predictions = model.transform(papers_corpus)
+        else:
+            # throw an error - unsupported option
+            raise ValueError('The option' + self.model_training + ' is not supported.')
 
         return papers_corpus_predictions
 
@@ -168,7 +224,7 @@ class PeerPapersSampler(Transformer):
         indexed_papers_corpus = papers.withColumn('paper_id_index',
                                                   F.row_number().over(Window.orderBy(self.papers_corpus.paperId_col)))
 
-        # add the generated index to each paper in the input dataset
+        # add the generated index to each paper in the input data set
         indexed_dataset = dataset.join(indexed_papers_corpus,
                                        indexed_papers_corpus[self.papers_corpus.paperId_col] == dataset[
                                            self.paperId_col]).drop(self.papers_corpus.paperId_col)
