@@ -141,7 +141,7 @@ class FoldSplitter:
     """
 
     def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", store=True):
+                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id"):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least 
@@ -165,7 +165,6 @@ class FoldSplitter:
         :param paperId_col: name of the column that stores paper ids in the input data frames
         :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
         :param userId_col name of the column that stores user ids in the input data frames
-        :param store: True if the folds have to be stored. See Fold class for more information how the folds are stored.
         :return: list of folds. Each fold is an object Fold. 
         """
         asc_data_frame = history.orderBy(timestamp_col)
@@ -174,7 +173,6 @@ class FoldSplitter:
         end_date = desc_data_frame.first()[2]
         fold_index = 1
         folds = []
-        #st_writer = FoldStatisticsWriter("new_statistics.txt")
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
@@ -186,10 +184,6 @@ class FoldSplitter:
             # build the corpus for the fold, it includes all papers published til the end of the fold
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
-            # st_writer.statistics(fold)
-            # store the fold
-            if(store):
-                fold.store()
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be
@@ -234,6 +228,33 @@ class FoldSplitter:
         fold.set_test_set_start_date(test_set_start_date)
         fold.set_test_set_end_date(end_date)
         return fold
+
+class FoldsUtils:
+
+    @staticmethod
+    def store_folds(folds, distributed=True):
+        """
+        Store folds. Possible both ways - distributed or non-distributed manner.
+        
+        :param folds: list of folds that will be stored
+        :param distributed: distributed(partitioned) or non-distributed(one single csv file) manner
+        """
+        for fold in folds:
+            if(distributed):
+                fold.store_distributed()
+            else:
+                fold.store()
+
+    @staticmethod
+    def write_fold_statistics(folds, statistic_file_name):
+        """
+        Compute statistics for each fold and store them in a file
+        :param folds: list of folds for which statistics will be computed and stored
+        :param statistic_file_name: file to which collected statistics are written
+        """
+        st_writer = FoldStatisticsWriter(statistic_file_name)
+        for fold in folds:
+            st_writer.statistics(fold)
 
 class FoldValidator():
     """
