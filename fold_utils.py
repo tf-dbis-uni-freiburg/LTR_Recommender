@@ -6,6 +6,134 @@ from pyspark.sql.types import *
 import math
 import scipy
 
+class Fold:
+    """
+    Encapsulates the notion of a fold. Each fold consists of training, test data frame and papers corpus. Each fold has an index which indicated 
+    its position in the sequence of all extracted folds. The index starts from 1. Each fold is extracted based on the timestamp of 
+    the samples. The samples in the test set are from a particular period in time. For example, the test_set can contains samples from
+    [2008-09-29, 2009-03-29] and the training_set from [2004-11-04, 2008-09-28]. Important note is that the test set starts when the training 
+    set ends. The samples are sorted by their timestamp column. Therefore, additional information for each fold is when the test set starts and ends. 
+    Respectively the same for the training set. Also, the duration of the test set - period_in_months.  Papers corpus for each fold contains all the papers 
+    published before the end date of a test set in the fold.
+    """
+
+    """ Name of the file in which test data frame of the fold is stored. """
+    TEST_DF_CSV_FILENAME = "test.csv"
+    """ Name of the file in which training data frame of the fold is stored. """
+    TRAINING_DF_CSV_FILENAME = "training.csv"
+    """ Name of the file in which papers corpus of the fold is stored. """
+    PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
+    """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
+    DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
+    """ Prefix of the name of the folder in which the fold is stored. """
+    PREFIX_FOLD_FOLDER_NAME = "fold-"
+
+    def __init__(self, training_data_frame, test_data_frame):
+        self.index = None
+        self.training_data_frame = training_data_frame
+        self.test_data_frame = test_data_frame
+        self.period_in_months = None
+        self.tr_start_date = None
+        self.ts_end_date = None
+        self.ts_start_date = None
+        self.papers_corpus = None
+
+    def set_index(self, index):
+        self.index = index
+
+    def set_papers_corpus(self, papers_corpus):
+        self.papers_corpus = papers_corpus
+
+    def set_period_in_months(self, period_in_months):
+        self.period_in_months = period_in_months
+
+    def set_test_set_start_date(self, ts_start_date):
+        self.ts_start_date = ts_start_date
+
+    def set_test_set_end_date(self, ts_end_date):
+        self.ts_end_date = ts_end_date
+
+    def set_training_set_start_date(self, tr_start_date):
+        self.tr_start_date = tr_start_date
+
+    def store_distributed(self):
+        """
+        For a fold, store its test data frame, training data frame and its papers corpus.
+        All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
+        of a fold. For example, for a fold with index 2, the stored information for it will be in
+        "distributed-fold-2" folder.
+        """
+        # save test data frame
+        self.test_data_frame.write.csv(Fold.get_test_data_frame_path(self.index, distributed=True))
+        # save training data frame
+        self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index, distributed=True))
+        # save paper corpus
+        self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=True))
+
+    def store(self):
+        """
+        For a fold, store its test data frame, training data frame and its papers corpus.
+        Each data frame will be stored in a single csv file.
+        All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
+        of a fold. For example, for a fold with index 2, the stored information for it will be in
+        "fold-2" folder.
+        """
+        # save test data frame
+        self.test_data_frame.coalesce(1).write.csv(Fold.get_test_data_frame_path(self.index, distributed=False))
+        # save training data frame
+        self.training_data_frame.coalesce(1).write.csv(Fold.get_training_data_frame_path(self.index, distributed=False))
+        # save paper corpus
+        self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
+
+    @staticmethod
+    def get_test_data_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where test data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+        
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if(distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "" + Fold.TEST_DF_CSV_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.TEST_DF_CSV_FILENAME
+
+    @staticmethod
+    def get_training_data_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where training data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if (distributed):
+            return  Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.TRAINING_DF_CSV_FILENAME
+
+    @staticmethod
+    def get_papers_corpus_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where papers corpus data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if (distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
+
+
 class FoldSplitter:
     """
     Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
@@ -46,18 +174,19 @@ class FoldSplitter:
         end_date = desc_data_frame.first()[2]
         fold_index = 1
         folds = []
-        st_writer = FoldStatisticsWriter("statistics.txt")
+        #st_writer = FoldStatisticsWriter("new_statistics.txt")
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
-            fold = FoldSplitter.extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
+            fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
             # build the corpus for the fold, it includes all papers published til the end of the fold
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
+            # st_writer.statistics(fold)
             # store the fold
             if(store):
                 fold.store()
@@ -92,7 +221,6 @@ class FoldSplitter:
         test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
             F.col(timestamp_col) <= end_date)
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
-        print(test_data_frame.count())
 
         # all distinct users in training data frame
         user_ids = training_data_frame.select(userId_col).distinct()
@@ -106,71 +234,6 @@ class FoldSplitter:
         fold.set_test_set_start_date(test_set_start_date)
         fold.set_test_set_end_date(end_date)
         return fold
-
-class Fold:
-    """
-    Encapsulates the notion of a fold. Each fold consists of training, test data frame and papers corpus. Each fold has an index which indicated 
-    its position in the sequence of all extracted folds. The index starts from 1. Each fold is extracted based on the timestamp of 
-    the samples. The samples in the test set are from a particular period in time. For example, the test_set can contains samples from
-    [2008-09-29, 2009-03-29] and the training_set from [2004-11-04, 2008-09-28]. Important note is that the test set starts when the training 
-    set ends. The samples are sorted by their timestamp column. Therefore, additional information for each fold is when the test set starts and ends. 
-    Respectively the same for the training set. Also, the duration of the test set - period_in_months.  Papers corpus for each fold contains all the papers 
-    published before the end date of a test set in the fold.
-    """
-
-    """ Name of the file in which test data frame of the fold is stored. """
-    TEST_DF_CSV_FILENAME = "test.csv"
-    """ Name of the file in which training data frame of the fold is stored. """
-    TRAINING_DF_CSV_FILENAME = "training.csv"
-    """ Name of the file in which papers corpus of the fold is stored. """
-    PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
-    """ Prefix of the name of the folder in which the fold is stored. """
-    PREFIX_FOLD_FOLDER_NAME = "fold-"
-
-    def __init__(self, training_data_frame, test_data_frame):
-        self.index = None
-        self.training_data_frame = training_data_frame
-        self.test_data_frame = test_data_frame
-        self.period_in_months = None
-        self.tr_start_date = None
-        self.ts_end_date = None
-        self.ts_start_date = None
-        self.papers_corpus = None
-
-    def set_index(self, index):
-        self.index = index
-
-    def set_papers_corpus(self, papers_corpus):
-        self.papers_corpus = papers_corpus
-
-    def set_period_in_months(self, period_in_months):
-        self.period_in_months = period_in_months
-
-    def set_test_set_start_date(self, ts_start_date):
-        self.ts_start_date = ts_start_date
-
-    def set_test_set_end_date(self, ts_end_date):
-        self.ts_end_date = ts_end_date
-
-    def set_training_set_start_date(self, tr_start_date):
-        self.tr_start_date = tr_start_date
-
-    def store(self):
-        """
-        For a fold, store its test data frame, training data frame and its papers corpus.
-        All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
-        of a fold. For example, for a fold with index 2, the stored information for it will be in
-        "fold-2" folder.
-        """
-        # save test data frame
-        self.test_data_frame.write.csv(
-            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TEST_DF_CSV_FILENAME)
-        # save training data frame
-        self.training_data_frame.write.csv(
-            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.TRAINING_DF_CSV_FILENAME)
-        # save paper corpus
-        self.papers_corpus.papers.write.csv(
-            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME)
 
 class FoldValidator():
     """
@@ -252,66 +315,6 @@ class FoldValidator():
             # evaluations_per_user.show()
             # self.store_results(evaluations_per_user, i)
 
-    def idcg(self, best_k_papers):
-        """
-        IDCG which is calculated as a sum over top k best predicted papers. Independent of a user. Top k papers are sorted 
-        by prediction (DESC). Then, for each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
-
-        :return: IDCG
-        """
-        # sort by prediction
-        sorted_best_k_papers = sorted(best_k_papers, key=lambda tup: -tup[1])
-        i = 1
-        sum = 0;
-        for paper_id, prediction in sorted_best_k_papers:
-            sum += (math.pow(2, prediction) - 1) / (math.log2(i + 1))
-            i += 1
-        return sum
-
-    def calculate_evaluation_metrics(self, top_k , papers_corpus_with_predictions, fold):
-        """
-        For each user in the test set, calculate its paper candidate set. It is {paper_corpus}/{training papers} for a user.
-        Based on the candidate set and user's test set of papers - calculate mrr@top_k, recall@top_k and ndcg@top_k.
-        
-        :param top_k: top k papers recommended for each user
-        :param papers_corpus_with_predictions: all papers in the corpus with their predictions. Format (paperId_col, "prediction")
-        :param fold: fold with training and test data sets 
-        :return: data frame that contains mrr, recall and ndcg column. They store calculation of these metrics per user
-        Format (user_id, mrr, recall, ndcg)
-        """
-        # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
-        training_user_library = fold.training_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("training_user_library"))
-        training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
-        max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
-
-        # take top k + max_training_library size
-        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(top_k + max_training_library)
-        top_papers_predictions = papers_corpus_with_predictions.groupBy().agg(F.collect_list(F.struct("paper_id", "prediction")).alias("predictions"))
-
-        # add the list of predictions to all selected predicted paper to each user
-        candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
-
-        # candidate_papers_per_user = candidate_papers_per_user.limit(1)
-        candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set", UDFContainer.getInstance().get_candidate_set_per_user_udf("predictions", "training_user_library", F.lit(top_k)))
-        candidate_papers_per_user = candidate_papers_per_user.select("user_id", "candidate_papers_set")
-
-        # add test user library to each user
-        test_user_library = fold.test_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("test_user_library"))
-        evaluation_per_user = test_user_library.join(candidate_papers_per_user, self.userId_col)
-
-        # add mrr
-        evaluation_per_user = evaluation_per_user.withColumn("mrr", UDFContainer.getInstance().mrr_per_user_udf("candidate_papers_set", "test_user_library"))
-
-        # add recall
-        evaluation_per_user = evaluation_per_user.withColumn("recall", UDFContainer.getInstance().recall_per_user_udf("candidate_papers_set", "test_user_library"))
-
-        # add ndcg
-        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(top_k)
-        top_k_papers_predictions = papers_corpus_with_predictions.rdd.map(lambda line: tuple([x for x in line])).collect()
-        idcg = self.idcg(top_k_papers_predictions)
-        evaluation_per_user = evaluation_per_user.withColumn("ndcg", UDFContainer.getInstance().ndcg_per_user_udf("candidate_papers_set", F.lit(idcg)))
-        return evaluation_per_user
-
     def evaluate(self, history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
@@ -328,73 +331,33 @@ class FoldValidator():
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test and training data frame
         """
         # creates all splits
-        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months)
-        for fold in folds:
-            # train a model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+        # TODO add these parameters up
+        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months, self.paperId_col,
+                         self.citeulikePaperId_col, self.userId_col, store=True)
+        # for fold in folds:
+        #     # train a model using term_occurrences of each paper and paper corpus
+        #     tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+        #                                       tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+        #     tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+        #
+        #     ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
+        #                          paperId_col="paper_id",
+        #                          userId_col="user_id", features_col="features")
+        #     training_data_frame = fold.training_data_frame
+        #     ltr.fit(training_data_frame)
+        #     papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
+        #     # discard columns as features and rawPrediction
+        #     papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
+        #
+        #     # calculate mrr, recall and NDCG based on top-10 papers
+        #     evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
 
-            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
-                                 paperId_col="paper_id",
-                                 userId_col="user_id", features_col="features")
-            training_data_frame = fold.training_data_frame
-            ltr.fit(training_data_frame)
-            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-            # discard columns as features and rawPrediction
-            papers_corpus_with_predictions = papers_corpus_with_predictions.select("paper_id", "prediction")
-
-            # calculate mrr, recall and NDCG based on top-10 papers
-            evaluations_per_user = self.calculate_evaluation_metrics(10, papers_corpus_with_predictions, fold)
-
-    def load_fold(self, spark, fold_index):
-        """
-        Load a fold based on its index. Loaded fold which contains test data frame, training data frame and papers corpus.
-        Structure of test and training data frame - (citeulike_paper_id, citeulike_user_hash, timestamp, user_id, paper_id)
-        Structure of papers corpus - (citeulike_paper_id, paper_id)
-        
-        :param spark: spark instance used for loading
-        :param fold_index: index of a fold that used for identifying its location
-        :return: loaded fold which contains test data frame, training data frame and papers corpus.
-        """
-        # (name, dataType, nullable)
-        fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                  StructField("citeulike_user_hash", StringType(), False),
-                                  StructField("timestamp", TimestampType(), False),
-                                  StructField("user_id", IntegerType(), False),
-                                  StructField("paper_id", IntegerType(), False)])
-        # load test data frame
-        test_data_frame = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME, header=False,
-                                              schema=fold_schema)
-        # load training data frame
-        training_data_frame = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME,
-                                                  header=False, schema=fold_schema)
-
-        fold = Fold(training_data_frame, test_data_frame)
-        fold.index = fold_index
-        # (name, dataType, nullable)
-        paper_corpus_schema = StructType([StructField("citeulike_paper_id", StringType(), False), StructField("paper_id", IntegerType(), False)])
-        # load papers corpus
-        papers = spark.read.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME,
-            header=False, schema=paper_corpus_schema)
-        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
-        return fold
-
-    def store_results(self, evaluations_per_user, fold_index):
-        # save evaluation per fold
-        evaluations_per_user.coalesce(1).write.csv(
-        Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + FoldEvaluationResultWriter.RESULTS_CSV_FILENAME)
-        # save average evaluation for this fold
-        # file = open(FoldEvaluationResultWriter.RESULTS_CSV_FILENAME, "a")
-
-
-class FoldEvaluationResultWriter:
+class FoldEvaluator:
 
     """ Name of the file in which results are written. """
     FOLD_RESULTS_CSV_FILENAME = "results.csv"
     """ Name of the file in which results are written. """
     RESULTS_CSV_FILENAME = "results.txt"
-
 
     # def __init__(self):
     #     file = open(filename, "a")
@@ -403,13 +366,69 @@ class FoldEvaluationResultWriter:
     #         "fold_index | fold_time | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems |"
     #         " #ratsTot | #ratsTR | #ratsTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
     #     file.close()
+    def calculate_evaluation_metrics(self, top_k, papers_corpus_with_predictions, fold):
+        """
+        For each user in the test set, calculate its paper candidate set. It is {paper_corpus}/{training papers} for a user.
+        Based on the candidate set and user's test set of papers - calculate mrr@top_k, recall@top_k and ndcg@top_k.
+
+        :param top_k: top k papers recommended for each user
+        :param papers_corpus_with_predictions: all papers in the corpus with their predictions. Format (paperId_col, "prediction")
+        :param fold: fold with training and test data sets 
+        :return: data frame that contains mrr, recall and ndcg column. They store calculation of these metrics per user
+        Format (user_id, mrr, recall, ndcg)
+        """
+        # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
+        training_user_library = fold.training_data_frame.groupBy(self.userId_col).agg(
+            F.collect_list(self.paperId_col).alias("training_user_library"))
+        training_user_library_size = training_user_library.select(
+            F.size("training_user_library").alias("tr_library_size"))
+        max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
+
+        # take top k + max_training_library size
+        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(
+            top_k + max_training_library)
+        top_papers_predictions = papers_corpus_with_predictions.groupBy().agg(
+            F.collect_list(F.struct("paper_id", "prediction")).alias("predictions"))
+
+        # add the list of predictions to all selected predicted paper to each user
+        candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
+
+        # candidate_papers_per_user = candidate_papers_per_user.limit(1)
+        candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set",
+                                                                         UDFContainer.getInstance().get_candidate_set_per_user_udf(
+                                                                             "predictions", "training_user_library",
+                                                                             F.lit(top_k)))
+        candidate_papers_per_user = candidate_papers_per_user.select("user_id", "candidate_papers_set")
+
+        # add test user library to each user
+        test_user_library = fold.test_data_frame.groupBy(self.userId_col).agg(
+            F.collect_list(self.paperId_col).alias("test_user_library"))
+        evaluation_per_user = test_user_library.join(candidate_papers_per_user, self.userId_col)
+
+        # add mrr
+        evaluation_per_user = evaluation_per_user.withColumn("mrr", UDFContainer.getInstance().mrr_per_user_udf(
+            "candidate_papers_set", "test_user_library"))
+
+        # add recall
+        evaluation_per_user = evaluation_per_user.withColumn("recall", UDFContainer.getInstance().recall_per_user_udf(
+            "candidate_papers_set", "test_user_library"))
+
+        # add ndcg
+        papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(
+            top_k)
+        top_k_papers_predictions = papers_corpus_with_predictions.rdd.map(
+            lambda line: tuple([x for x in line])).collect()
+        idcg = self.idcg(top_k_papers_predictions)
+        evaluation_per_user = evaluation_per_user.withColumn("ndcg", UDFContainer.getInstance().ndcg_per_user_udf(
+            "candidate_papers_set", F.lit(idcg)))
+        return evaluation_per_user
 
     def store_results(self, evaluations_per_user, fold_index):
         # save evaluation per fold
-        evaluations_per_user.coalesce(1).write.csv(Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + FoldEvaluationResultWriter.RESULTS_CSV_FILENAME)
+        evaluations_per_user.coalesce(1).write.csv(
+            Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/" + FoldEvaluationResultWriter.RESULTS_CSV_FILENAME)
         # save average evaluation for this fold
         # file = open(FoldEvaluationResultWriter.RESULTS_CSV_FILENAME, "a")
-
 
 class FoldStatisticsWriter:
     """

@@ -1,4 +1,6 @@
 from pyspark.sql.types import *
+from paper_corpus_builder import *
+from fold_utils import Fold
 
 class Loader:
     """
@@ -221,3 +223,36 @@ class Loader:
         # convert occurrences to int
         terms_occurrences = {term: int(occurrence) for (term, occurrence) in bag_of_words_map}
         return word_count, terms_occurrences
+
+    def load_fold(self, spark, fold_index, distributed=True):
+        """
+        Load a fold based on its index. Loaded fold which contains test data frame, training data frame and papers corpus.
+        Structure of test and training data frame - (citeulike_paper_id, citeulike_user_hash, timestamp, user_id, paper_id)
+        Structure of papers corpus - (citeulike_paper_id, paper_id)
+
+        :param spark: spark instance used for loading
+        :param fold_index: index of a fold that used for identifying its location
+        :param distributed if the fold was stored in distributed or non-distributed manner
+        :return: loaded fold which contains test data frame, training data frame and papers corpus.
+        """
+        # (name, dataType, nullable)
+        fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
+                                  StructField("citeulike_user_hash", StringType(), False),
+                                  StructField("timestamp", TimestampType(), False),
+                                  StructField("user_id", IntegerType(), False),
+                                  StructField("paper_id", IntegerType(), False)])
+        # load test data frame
+        test_data_frame = spark.read.csv(Fold.get_test_data_frame_path(fold_index, distributed), header=False,
+            schema=fold_schema)
+        # load training data frame
+        training_data_frame = spark.read.csv(Fold.get_training_data_frame_path(fold_index, distributed), header=False, schema=fold_schema)
+
+        fold = Fold(training_data_frame, test_data_frame)
+        fold.index = fold_index
+        # (name, dataType, nullable)
+        paper_corpus_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
+                                           StructField("paper_id", IntegerType(), False)])
+        # load papers corpus
+        papers = spark.read.csv(Fold.get_papers_corpus_frame_path(fold_index, distributed), header=False, schema=paper_corpus_schema)
+        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+        return fold

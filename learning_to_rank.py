@@ -105,6 +105,7 @@ class LearningToRank(Estimator, Transformer):
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
         self.model = lsvcModel
+        return self.model
 
     def _transform(self, dataset):
         """

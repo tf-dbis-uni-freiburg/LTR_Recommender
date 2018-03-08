@@ -334,6 +334,22 @@ class UDFContainer():
             i += 1
         return  sum / normalization_factor
 
+    def idcg(self, best_k_papers):
+        """
+        IDCG which is calculated as a sum over top k best predicted papers. Independent of a user. Top k papers are sorted 
+        by prediction (DESC). Then, for each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+
+        :return: IDCG
+        """
+        # sort by prediction
+        sorted_best_k_papers = sorted(best_k_papers, key=lambda tup: -tup[1])
+        i = 1
+        sum = 0;
+        for paper_id, prediction in sorted_best_k_papers:
+            sum += (math.pow(2, prediction) - 1) / (math.log2(i + 1))
+            i += 1
+        return sum
+
     def __calculate_prediction(features, coefficients):
         """
         Calculate a score prediction for a paper. Multiple its features vector

@@ -1,12 +1,9 @@
 import os
-
-
+import datetime
 from loader import  Loader
-from paper_corpus_builder import PaperCorpusBuilder
-from fold_utils import  FoldSplitter, FoldStatisticsWriter, FoldValidator
 from vectorizers import *
-from learning_to_rank import LearningToRank
-from spark_utils import *
+from fold_utils import  FoldValidator, FoldSplitter
+from paper_corpus_builder import PaperCorpusBuilder
 
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
@@ -20,6 +17,8 @@ papers = loader.load_papers("papers.csv")
 # # Loading of the (citeulike paper id - paper id) mapping
 # # format (citeulike_paper_id, paper_id)
 papers_mapping = loader.load_papers_mapping("citeulikeId_docId_map.dat")
+
+papers = papers.join(papers_mapping, "citeulike_paper_id")
 
 # Loading history
 history = loader.load_history("current")
@@ -38,10 +37,10 @@ history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 # Loading bag of words for each paper
 # format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
-#
+
 fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence")
-fold_validator.evaluate_folds(spark)
+fold_validator.evaluate(history, papers, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
 
 # if folds are already stored and we only load them
 # fold_validator.evaluate_folds(spark)
