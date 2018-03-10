@@ -14,8 +14,8 @@ spark = SparkSession.builder.master("local").appName("LTRRecommender").getOrCrea
 loader = Loader("../citeulike_crawled/terms_keywords_based/", spark);
 
 papers = loader.load_papers("papers.csv")
-# # Loading of the (citeulike paper id - paper id) mapping
-# # format (citeulike_paper_id, paper_id)
+# Loading of the (citeulike paper id - paper id) mapping
+# format (citeulike_paper_id, paper_id)
 papers_mapping = loader.load_papers_mapping("citeulikeId_docId_map.dat")
 
 papers = papers.join(papers_mapping, "citeulike_paper_id")
@@ -33,7 +33,7 @@ history = history.join(user_mappings, "citeulike_user_hash", "inner")
 
 # map citeulike_paper_id to paper_id
 history = history.join(papers_mapping, "citeulike_paper_id", "inner")
-#
+
 # Loading bag of words for each paper
 # format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")

@@ -275,7 +275,8 @@ class UDFContainer():
         filtered_sorted_prediction_papers = [(float(x), float(y)) for x, y in sorted_prediction_papers if x not in training_paper_set]
         return filtered_sorted_prediction_papers[:k]
 
-    def __mrr_per_user(predicted_papers, test_papers):
+    def __mrr_per_user(predicted_papers, test_papers, k):
+        # TODO change paramaters add k
         """
         Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order).
         Find the first hit in the predicted papers and return 1/(index of the first hit). For
@@ -285,10 +286,13 @@ class UDFContainer():
 
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+        :param k 
         :return: mrr 
         """
         # sort by prediction
         sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+        # take first k
+        sorted_prediction_papers = sorted_prediction_papers[:k]
         test_papers_set = set(test_papers)
         index = 1
         for i, prediction in sorted_prediction_papers:
@@ -297,7 +301,8 @@ class UDFContainer():
             index += 1
         return 0.0
 
-    def __recall_per_user(predicted_papers, test_papers):
+    def __recall_per_user(predicted_papers, test_papers, k):
+        # TODO change paramaters add k
         """
         Calculate Recall for a specific user. Extract only paper ids from predicted_papers, discard prediction information.
         Then, find the number of hits (common paper ids) that both arrays have. Return (#hits)/ (size of test_papers). 
@@ -306,13 +311,18 @@ class UDFContainer():
         
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+        :param k 
         :return: recall
         """
-        predicted_papers = [int(x[0]) for x in predicted_papers]
+        # sort by prediction
+        sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+        # take first k
+        sorted_prediction_papers = sorted_prediction_papers[:k]
+        predicted_papers = [int(x[0]) for x in sorted_prediction_papers]
         hits = set(predicted_papers).intersection(test_papers)
         return len(hits) / len(test_papers)
 
-    def __ndcg_per_user(predicted_papers, normalization_factor):
+    def __ndcg_per_user(predicted_papers, normalization_factor, k):
         """
         Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order). Then calculate
         DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add

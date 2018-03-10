@@ -1,5 +1,6 @@
 from pyspark.ml.base import Estimator
 from pyspark.ml.classification import LinearSVC
+from enum import Enum
 import pyspark.sql.functions as F
 from spark_utils import *
 from pyspark.sql.window import Window
@@ -86,11 +87,11 @@ class LearningToRank(Estimator, Transformer):
         :return: a trained learning-to-rank model that can be used for predictions
         """
         # train multiple models, one for each user in the data set
-        if(self.model_training == "model_per_user"):
+        if(self.model_training == Model_Training.MODEL_PER_USER):
             # extract all distinct users
             distinct_user_ids = datetime.select(self.userId_col).distinct().collect()
 
-            # train model for each user, simply by for loop over all users
+            # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
                 # select only records for particular user, only those papers liked by the current user
                 user_dataset = dataset.filter(self.userId_col == userId)
@@ -99,7 +100,7 @@ class LearningToRank(Estimator, Transformer):
                 # add the model for the user
                 self.models[userId] = user_lsvcModel
             return self.models
-        elif(self.model_training == "single_model_all_users"):
+        elif(self.model_training == Model_Training.SINGLE_MODEL_ALL_USERS):
             # Fit the model over full dataset and produce only one model for all users
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
@@ -148,7 +149,7 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper profiles
         :return: dataset with predictions - column "prediction"
         """
-        if(self.model_training == "model_per_user"):
+        if(self.model_training == Model_Training.MODEL_PER_USER):
             papers_corpus_predictions = None
             for userId, model in self.models:
 
@@ -165,7 +166,7 @@ class LearningToRank(Estimator, Transformer):
                 # add predictions for a user to the final set of predictions
 
                 papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
-        elif (self.model_training == "single_model_all_users"):
+        elif (self.model_training == Model_Training.SINGLE_MODEL_ALL_USERS):
             model = self.models[0]
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
             self.paper_profiles_model.setOutputCol(self.features_col)
@@ -181,6 +182,9 @@ class LearningToRank(Estimator, Transformer):
 
         return papers_corpus_predictions
 
+class Model_Training(Enum):
+    MODEL_PER_USER = 0
+    SINGLE_MODEL_ALL_USERS = 1
 
 class PeerPapersSampler(Transformer):
     """
