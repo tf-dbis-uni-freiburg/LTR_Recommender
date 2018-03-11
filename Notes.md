@@ -16,3 +16,6 @@
 
 ## Found invalid values for "month" in papers.csv
 - Jun-Sep, MarMar, {, FebMar, JanAug-JanSep, Dec--JanMay\~{, FebFeb--FebJun, FebFeb, Jun--FebAug\~{
+
+## Splitting the data into folds and storing all 23 folds takes around 10 hours
+## Loading folds and running statistics over then around 20 mins
