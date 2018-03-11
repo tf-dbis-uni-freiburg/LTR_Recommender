@@ -1,9 +1,9 @@
 import os
 import datetime
 from loader import  Loader
-from vectorizers import *
 from fold_utils import  FoldValidator, FoldSplitter
-from paper_corpus_builder import PaperCorpusBuilder
+from learning_to_rank import PapersPairBuilder, LearningToRank
+
 
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
@@ -38,10 +38,9 @@ history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 # format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
-fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training="single_model_all_users")
-fold_validator.create_folds(history, papers, papers_mapping, statistics_file_name="statistics_wNU.txt" ,timestamp_col="timestamp", fold_period_in_months=6)
-
+fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
+fold_validator.evaluate_folds(spark)
 # if folds are already stored and we only load them
 # fold_validator.evaluate_folds(spark)
 

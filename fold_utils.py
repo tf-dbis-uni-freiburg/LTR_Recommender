@@ -1,7 +1,7 @@
 from dateutil.relativedelta import relativedelta
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
-from learning_to_rank import LearningToRank
+from learning_to_rank import *
 from pyspark.sql.types import *
 
 class Fold:
@@ -63,12 +63,12 @@ class Fold:
         "distributed-fold-2" folder.
         """
         # save test data frame
-        self.test_data_frame.write.csv(Fold.get_test_data_frame_path(self.index, distributed=True))
+        self.test_data_frame.write.csv(Fold.get_test_data_frame_path(self.index))
         # save training data frame
-        self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index, distributed=True))
+        self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index))
         # save paper corpus
-        self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=True))
-        self.folder_path = Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(self.fold_index) + "/"
+        self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index))
+        self.folder_path = Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/"
 
     def store(self):
         """
@@ -84,7 +84,7 @@ class Fold:
         self.training_data_frame.coalesce(1).write.csv(Fold.get_training_data_frame_path(self.index, distributed=False))
         # save paper corpus
         self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
-        self.folder_path = Fold.PREFIX_FOLD_FOLDER_NAME + str(self.fold_index) + "/"
+        self.folder_path = Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/"
 
     @staticmethod
     def get_test_data_frame_path(fold_index, distributed=True):
@@ -214,6 +214,7 @@ class FoldSplitter:
         # remove all rows outside the period [test_start_date, test_end_date]
         test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
             F.col(timestamp_col) <= end_date)
+
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
 
         # all distinct users in training data frame
@@ -263,29 +264,27 @@ class FoldValidator():
     on a time slot into multiple folds. If they are already stored, before running the algorithm, they will be loaded. Otherwise sFoldSplitter will be used 
     to extract and store them for later use. Each fold contains test, training data set and a papers corpus. The model is trained over the training set. 
     Then the prediction over the test set is calculated. 
-    #TODO CONTINUE
+    #TODO CONTINUE and fix it
     """
 
     """ Total number of folds. """
     NUMBER_OF_FOLD = 23;
 
-    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation="equally_distributed_pairs", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "single_model_all_users"):
+    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
         """
         Construct FoldValidator object.
         
         :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
         :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank 
-        :param pairs_generation: duplicated_pairs, one_class_pairs, equally_distributed_pairs. See LearningToRank
+        :param pairs_generation: DUPLICATED_PAIRS, ONE_CLASS_PAIRS, EQUALLY_DISTRIBUTED_PAIRS. See Pairs_Generation enum
         :param paperId_col: name of a column that contains identifier of each paper
         :param citeulikePaperId_col: name of a column that contains citeulike identifier of each paper
         :param userId_col: name of a column that contains identifier of each user
         :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
-        :param model_training: 
-        1) "model_per_user"
-        2) "single_model_all_users"
+        :param model_training: MODEL_PER_USER or SINGLE_MODEL_ALL_USERS. See Model_Training enum
         """
         self.paperId_col = paperId_col
         self.citeulikePaperId_col = citeulikePaperId_col
@@ -302,6 +301,7 @@ class FoldValidator():
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
         of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
+        Statistics are also stored for each fold.
 
         :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
         citeulikePaperId_col, userId_col
@@ -332,19 +332,24 @@ class FoldValidator():
         :param distributed if the fold was stored in distributed or non-distributed manner
         :return: loaded fold which contains test data frame, training data frame and papers corpus.
         """
-        # (name, dataType, nullable)
-        fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                  StructField("citeulike_user_hash", StringType(), False),
-                                  StructField("timestamp", TimestampType(), False),
-                                  StructField("user_id", IntegerType(), False),
-                                  StructField("paper_id", IntegerType(), False)])
+        test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
+                                       StructField("citeulike_paper_id", StringType(), False),
+                                        StructField("citeulike_user_hash", StringType(), False),
+                                        StructField("timestamp", TimestampType(), False),
+                                        StructField("paper_id", IntegerType(), False)])
         # load test data frame
         test_data_frame = spark.read.csv(Fold.get_test_data_frame_path(fold_index, distributed), header=False,
-                                         schema=fold_schema)
-        # load training data frame
-        training_data_frame = spark.read.csv(Fold.get_training_data_frame_path(fold_index, distributed), header=False,
-                                             schema=fold_schema)
+            schema=test_fold_schema)
 
+        # load training data frame
+        # (name, dataType, nullable)
+        training_fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
+                                           StructField("citeulike_user_hash", StringType(), False),
+                                           StructField("timestamp", TimestampType(), False),
+                                           StructField("user_id", IntegerType(), False),
+                                           StructField("paper_id", IntegerType(), False)])
+        training_data_frame = spark.read.csv(Fold.get_training_data_frame_path(fold_index, distributed), header=False,
+                                             schema=training_fold_schema)
         fold = Fold(training_data_frame, test_data_frame)
         fold.index = fold_index
         # (name, dataType, nullable)
@@ -359,53 +364,56 @@ class FoldValidator():
 
     def evaluate_folds(self, spark):
         """
-        Load each fold, run LTR on it and evaluate its predictions. Then calculate mrr, recall and NDCG per user in the each fold.
-        # TODO continue it when the method is finished.
+        Load each fold, run LTR on it and evaluate its predictions. Then calculate mertics for each fold (MRR@k, RECALL@k, NDCG@k)
+        Evaluation are stored for each fold and overall for all folds (avg).
         
         :param spark: spark instance used for loading the folds
         """
-
-        # load folds one by one and evaluate on them
-        # total number of fold  - 23
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD):
-            print("Print...")
+        st_writer = FoldStatisticsWriter("statistics_wNU.txt")
+        #load folds one by one and evaluate on them
+        #total number of fold  - 23
+        for i in range(23, FoldValidator.NUMBER_OF_FOLD + 1):
             fold = self.load_fold(spark, i)
-
-            # train a tf idf model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-            ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation="equally_distributed_pairs", peer_papers_count=self.peer_papers_count,
-                                 paperId_col="paper_id", userId_col="user_id", features_col="features", model_training=self.model_training)
-
-            ltr.fit(fold.training_data_frame)
-            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus)
-
-            # TODO only for testing
-            #papers_corpus_with_predictions.write.save("predictions.parquet")
-            #papers_corpus_with_predictions = spark.read.load("predictions.parquet")
-
-            # EVALUATION
-            # extract the raw score for each row
-            vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
-            papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
-
-            FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = "single_model_all_users")\
-                .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = "user_id", paperId_col = "paper_id")
+            #compute statistics for each fold and store it
+            st_writer.statistics(fold)
+            #
+            # # train a tf idf model using term_occurrences of each paper and paper corpus
+            # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+            #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+            # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            # ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+            #                      paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
+            #
+            # ltr.fit(fold.training_data_frame)
+            # papers_corpus_with_predictions = ltr.transform(fold.papers_corpus)
+            #
+            # # TODO only for testing
+            # #papers_corpus_with_predictions.write.save("predictions.parquet")
+            # #papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+            #
+            # # EVALUATION
+            # # extract the raw score for each row
+            # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
+            # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
+            #
+            # FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
+            #     .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
 
 class FoldEvaluator:
+    """ TODO add class comments """
 
     """ Name of the file in which results for a fold are written. """
     FOLD_RESULTS_CSV_FILENAME = "fold_results.txt"
-    """ Name of the file in which results are written. """
+    """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.txt"
 
-    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "single_model_all_users"):
+    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
         self.model_training = model_training
         self.max_top_k =  max((k_mrr + k_ndcg + k_recall))
+
         # write a file for all folds, it contains a row per fold
         file = open(self.RESULTS_CSV_FILENAME, "a")
         header_line = "fold_index |"
@@ -557,8 +565,8 @@ class FoldStatisticsWriter:
         file = open(filename, "a")
         # write the header in the file
         file.write(
-            "fold_index | fold_time | #usersTot | #usersTR | #usersTS | #newUsers | #itemsTot | #itemsTR | #itemsTS | #newItems |"
-            " #ratsTot | #ratsTR | #ratsTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
+            "fold_index | fold_time | #UTot | #UTR | #UTS | #dU | #ITot | #ITR | #ITS | #nI |"
+            " #RTot | #RTR | #RTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
         file.close()
 
     def statistics(self, fold, userId_col="user_id", paperId_col="paper_id"):
@@ -596,8 +604,8 @@ class FoldStatisticsWriter:
         tr_users_count = tr_users.count()
         test_users = test_data_frame.select(userId_col).distinct()
         test_users_count = test_users.count()
-        new_users_count = tr_users.subtract(test_users).count()
 
+        new_users_count = tr_users.subtract(test_users).count()
         # items in total, TR, TS (with or without new items)
         total_items_count = full_data_set.select(paperId_col).distinct().count()
         tr_items = training_data_frame.select(paperId_col).distinct()

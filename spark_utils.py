@@ -112,37 +112,40 @@ class UDFContainer():
         return self.get_candidate_set_per_user(total_predicted_papers, training_paper, k)
 
 
-    def mrr_per_user_udf(self, predicted_papers, test_papers):
+    def mrr_per_user_udf(self, predicted_papers, test_papers, k):
         """
-        Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order).
+        Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order) and select top k.
         Find the first hit in the predicted papers and return 1/(index of the first hit). For
         example, if a test_paper is [7, 12, 19, 66, 10]. And sorted predicted_papers is 
         [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)]. The first hit 
         is 7 which index is 3. Then the mrr is 1 / (3+1)
-        
+
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+        :param k top # papers needed to be selected
         :return: mrr 
         """
-        return self.mrr_per_user(predicted_papers, test_papers)
+        return self.mrr_per_user(predicted_papers, test_papers, k)
 
-    def recall_per_user_udf(self, predicted_papers, test_papers):
+    def recall_per_user_udf(self, predicted_papers, test_papers, k):
         """
-        Calculate Recall for a specific user. Extract only paper ids from predicted_papers, discard prediction information.
+        Calculate Recall for a specific user. Select only the top k paper ids sorted DESC by prediction score.
+        Extract only paper ids from predicted_papers, discard prediction information.
         Then, find the number of hits (common paper ids) that both arrays have. Return (#hits)/ (size of test_papers). 
         For example, if a test_paper is [7, 12, 19, 66, 10]. And predicted_papers is  [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)].
         Hits are [7, 12, 10, 66]. Then the result value is (4 / 5) = 0.8
 
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+        :param k top # papers needed to be selected
         :return: recall
         """
-        return self.recall_per_user(predicted_papers, test_papers)
+        return self.recall_per_user(predicted_papers, test_papers, k)
 
-    def ndcg_per_user_udf(self, predicted_papers, normalization_factor):
+    def ndcg_per_user_udf(self, predicted_papers, normalization_factor, k):
         """
-        Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order). Then calculate
-        DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
+        Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
+        Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
         ((prediction) / log(2, position of the paper in the list + 1)). And the end divide by normalization factor 
         - IDCG calculated over top k best predicted papers. For example, if sorted predicted_papers is 
         [(3, 5.5), (4, 4.5) , (5, 4.3)]. DCG will be ((5.5 / log2(2)) + (4.5 / log2(3)) + (4.3 / log2(4)))
@@ -150,9 +153,10 @@ class UDFContainer():
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param normalization_factor: IDCG which is calculated as a sum over top k best predicted papers. Independent of a user.
         For each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+        :param k top # papers needed to be selected
         :return: NDCG for a user
         """
-        return self.ndcg_per_user(predicted_papers, normalization_factor)
+        return self.ndcg_per_user(predicted_papers, normalization_factor, k)
 
     def calculate_prediction_udf(self, features, coefficients):
         """
@@ -276,9 +280,8 @@ class UDFContainer():
         return filtered_sorted_prediction_papers[:k]
 
     def __mrr_per_user(predicted_papers, test_papers, k):
-        # TODO change paramaters add k
         """
-        Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order).
+        Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order) and select top k.
         Find the first hit in the predicted papers and return 1/(index of the first hit). For
         example, if a test_paper is [7, 12, 19, 66, 10]. And sorted predicted_papers is 
         [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)]. The first hit 
@@ -286,7 +289,7 @@ class UDFContainer():
 
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
-        :param k 
+        :param k top # papers needed to be selected
         :return: mrr 
         """
         # sort by prediction
@@ -302,16 +305,16 @@ class UDFContainer():
         return 0.0
 
     def __recall_per_user(predicted_papers, test_papers, k):
-        # TODO change paramaters add k
         """
-        Calculate Recall for a specific user. Extract only paper ids from predicted_papers, discard prediction information.
+        Calculate Recall for a specific user. Select only the top k paper ids sorted DESC by prediction score.
+        Extract only paper ids from predicted_papers, discard prediction information.
         Then, find the number of hits (common paper ids) that both arrays have. Return (#hits)/ (size of test_papers). 
         For example, if a test_paper is [7, 12, 19, 66, 10]. And predicted_papers is  [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)].
         Hits are [7, 12, 10, 66]. Then the result value is (4 / 5) = 0.8
         
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
-        :param k 
+        :param k top # papers needed to be selected
         :return: recall
         """
         # sort by prediction
@@ -324,8 +327,8 @@ class UDFContainer():
 
     def __ndcg_per_user(predicted_papers, normalization_factor, k):
         """
-        Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order). Then calculate
-        DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
+        Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
+        Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
         ((prediction) / log(2, position of the paper in the list + 1)). And the end divide by normalization factor 
         - IDCG calculated over top k best predicted papers. For example, if sorted predicted_papers is 
          [(3, 5.5), (4, 4.5) , (5, 4.3)]. DCG will be ((5.5 / log2(2)) + (4.5 / log2(3)) + (4.3 / log2(4)))
@@ -333,6 +336,7 @@ class UDFContainer():
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
         :param normalization_factor: IDCG which is calculated as a sum over top k best predicted papers. Independent of a user.
         For each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+        :param k top # papers needed to be selected
         :return: NDCG for a user
         """
         # sort by prediction
