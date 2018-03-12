@@ -1,8 +1,5 @@
 from pyspark.sql.types import *
 
-from fold_utils import Fold
-from paper_corpus_builder import *
-
 class Loader:
     """
     Class that contains functionality for parsing and loading different files into data frames.

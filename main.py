@@ -41,8 +41,6 @@ bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
 fold_validator.evaluate_folds(spark)
-# if folds are already stored and we only load them
-# fold_validator.evaluate_folds(spark)
 
 # splitter = FoldSplitter(spark)
 # #fold = splitter.extract_fold(history, datetime.datetime(2004, 11, 4), 6, timestamp_col="timestamp")

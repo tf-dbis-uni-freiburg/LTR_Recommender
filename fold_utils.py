@@ -287,6 +287,7 @@ class FoldValidator():
         :param model_training: MODEL_PER_USER or SINGLE_MODEL_ALL_USERS. See Model_Training enum
         """
         self.paperId_col = paperId_col
+        self.userId_col = userId_col
         self.citeulikePaperId_col = citeulikePaperId_col
         self.peer_papers_count = peer_papers_count
         self.bag_of_words = bag_of_words
@@ -334,9 +335,9 @@ class FoldValidator():
         """
         test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
                                        StructField("citeulike_paper_id", StringType(), False),
-                                        StructField("citeulike_user_hash", StringType(), False),
-                                        StructField("timestamp", TimestampType(), False),
-                                        StructField("paper_id", IntegerType(), False)])
+                                       StructField("citeulike_user_hash", StringType(), False),
+                                       StructField("timestamp", TimestampType(), False),
+                                       StructField("paper_id", IntegerType(), False)])
         # load test data frame
         test_data_frame = spark.read.csv(Fold.get_test_data_frame_path(fold_index, distributed), header=False,
             schema=test_fold_schema)
@@ -369,38 +370,43 @@ class FoldValidator():
         
         :param spark: spark instance used for loading the folds
         """
-        st_writer = FoldStatisticsWriter("statistics_wNU.txt")
-        #load folds one by one and evaluate on them
-        #total number of fold  - 23
-        for i in range(23, FoldValidator.NUMBER_OF_FOLD + 1):
+
+        # load folds one by one and evaluate on them
+        # total number of fold  - 23
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
+            tstart = datetime.datetime.now()
+            print(tstart)
             fold = self.load_fold(spark, i)
-            #compute statistics for each fold and store it
-            st_writer.statistics(fold)
-            #
-            # # train a tf idf model using term_occurrences of each paper and paper corpus
-            # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-            #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-            # ltr = LearningToRank(fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
-            #                      paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
-            #
-            # ltr.fit(fold.training_data_frame)
-            # papers_corpus_with_predictions = ltr.transform(fold.papers_corpus)
-            #
-            # # TODO only for testing
-            # #papers_corpus_with_predictions.write.save("predictions.parquet")
-            # #papers_corpus_with_predictions = spark.read.load("predictions.parquet")
-            #
-            # # EVALUATION
-            # # extract the raw score for each row
-            # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
-            # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
-            #
-            # FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-            #     .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+            # train a tf idf model using term_occurrences of each paper and paper corpus
+            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            ltr = LearningToRank(spark, fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+                                 paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
+
+            ltr.fit(fold.training_data_frame)
+            papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
+
+            tend = datetime.datetime.now()
+            print(tend)
+            delta = tend - tstart
+            print(delta)
+            # TODO only for testing
+            # papers_corpus_with_predictions.write.save("predictions-fold-2.csv")
+            #papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+
+            # EVALUATION
+            # extract the raw score for each row
+            vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
+            papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
+
+            FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
+                .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
 
 class FoldEvaluator:
-    """ TODO add class comments """
+    """ 
+    TODO add comments
+    """
 
     """ Name of the file in which results for a fold are written. """
     FOLD_RESULTS_CSV_FILENAME = "fold_results.txt"
@@ -432,7 +438,7 @@ class FoldEvaluator:
         """
         For each user in the test set, calculate its paper candidate set. It is {paper_corpus}/{training papers} for a user.
         Based on the candidate set and user's test set of papers - calculate mrr@top_k, recall@top_k and NDCG@top_k.
-        TODO change comments
+        TODO fix comments
         
         :param papers_corpus_with_predictions: all papers in the corpus with their predictions. Format (paperId_col, "prediction")
         :param fold: fold with training and test data sets 
@@ -441,12 +447,12 @@ class FoldEvaluator:
         """
 
         # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
-        training_user_library = fold.training_data_frame.groupBy(self.userId_col).agg(F.collect_list(paperId_col).alias("training_user_library"))
+        training_user_library = fold.training_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("training_user_library"))
         training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
         max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
 
         candidate_papers_per_user = None
-        if(self.model_training == "single_model_all_users"):
+        if(self.model_training == LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
             # take max top k + max_training_library size
             papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy(score_col, ascending=False).limit(self.max_top_k + max_training_library)
 
@@ -455,7 +461,9 @@ class FoldEvaluator:
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
 
-        elif(self.model_training == "model_per_user"):
+        elif(self.model_training == LearningToRank.Model_Training.MODEL_PER_USER):
+
+            # TODO optimization only users that are part of a test set are needed for evaluation, not all users in the training data set
             window = Window.partitionBy(userId_col).orderBy(score_col.desc())
 
             limit =self.max_top_k + max_training_library
