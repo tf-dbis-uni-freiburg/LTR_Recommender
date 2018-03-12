@@ -142,21 +142,24 @@ class UDFContainer():
         """
         return self.recall_per_user(predicted_papers, test_papers, k)
 
-    def ndcg_per_user_udf(self, predicted_papers, normalization_factor, k):
+    def ndcg_per_user_udf(self, predicted_papers, test_papers, k):
         """
         Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
         Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
-        ((prediction) / log(2, position of the paper in the list + 1)). And the end divide by normalization factor 
-        - IDCG calculated over top k best predicted papers. For example, if sorted predicted_papers is 
-        [(3, 5.5), (4, 4.5) , (5, 4.3)]. DCG will be ((5.5 / log2(2)) + (4.5 / log2(3)) + (4.3 / log2(4)))
-
+        ((prediction) / log(2, position of the paper in the list + 1)). Prediction of a paper is either 0 or 1. If a predicted
+        paper is part of the test set, its prediction is 1; otherwise its prediction is 0. Finally ,divide by normalization factor 
+        - IDCG calculated over top k predicted papers. IDCG is calculated the same way as DCG, but the only difference is that each 
+        paper from top k has prediction/relevance 1.
+        For example, if sorted top 5 predicted_papers are [(3, 5.5), (7, 4.5) , (5, 4.3), (6, 4.1), (4, 3.0)] and a test set 
+        is [(2, 6.4), (5, 4.5), (3, 1.2)]. DCG will be (1 / log2(2)) + (1 / log2(5)), hits are only paper 3 and paper 5.
+        IDCG will be (1 / log2(2)) + (1 / log2(3)) + (1 / log2(4)) + (1 / log2(5)) + (1 / log2(6)))
+         
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
-        :param normalization_factor: IDCG which is calculated as a sum over top k best predicted papers. Independent of a user.
-        For each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+        :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
         :param k top # papers needed to be selected
         :return: NDCG for a user
         """
-        return self.ndcg_per_user(predicted_papers, normalization_factor, k)
+        return self.ndcg_per_user(predicted_papers, test_papers, k)
 
     def calculate_prediction_udf(self, features, coefficients):
         """
@@ -325,44 +328,37 @@ class UDFContainer():
         hits = set(predicted_papers).intersection(test_papers)
         return len(hits) / len(test_papers)
 
-    def __ndcg_per_user(predicted_papers, normalization_factor, k):
+    def __ndcg_per_user(predicted_papers, test_papers, k):
         """
         Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
         Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
-        ((prediction) / log(2, position of the paper in the list + 1)). And the end divide by normalization factor 
-        - IDCG calculated over top k best predicted papers. For example, if sorted predicted_papers is 
-         [(3, 5.5), (4, 4.5) , (5, 4.3)]. DCG will be ((5.5 / log2(2)) + (4.5 / log2(3)) + (4.3 / log2(4)))
+        ((prediction) / log(2, position of the paper in the list + 1)). Prediction of a paper is either 0 or 1. If a predicted
+        paper is part of the test set, its prediction is 1; otherwise its prediction is 0. Finally ,divide by normalization factor 
+        - IDCG calculated over top k predicted papers. IDCG is calculated the same way as DCG, but the only difference is that each 
+        paper from top k has prediction/relevance 1.
+        For example, if sorted top 5 predicted_papers are [(3, 5.5), (7, 4.5) , (5, 4.3), (6, 4.1), (4, 3.0)] and a test set 
+        is [(2, 6.4), (5, 4.5), (3, 1.2)]. DCG will be (1 / log2(2)) + (1 / log2(5)), hits are only paper 3 and paper 5.
+        IDCG will be (1 / log2(2)) + (1 / log2(3)) + (1 / log2(4)) + (1 / log2(5)) + (1 / log2(6)))
          
         :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
-        :param normalization_factor: IDCG which is calculated as a sum over top k best predicted papers. Independent of a user.
-        For each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
+        :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
         :param k top # papers needed to be selected
         :return: NDCG for a user
         """
         # sort by prediction
         sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
-        i = 1
-        sum = 0;
+        test_papers_set = set(test_papers)
+        position = 1
+        dcg = 0;
+        idcg = 0
         for paper_id, prediction in sorted_prediction_papers:
-            sum += prediction / (math.log2(i + 1))
-            i += 1
-        return  sum / normalization_factor
+            # if there is a hit
+            if (int(paper_id) in test_papers_set):
+                dcg += 1 / (math.log2(position + 1))
 
-    def idcg(self, best_k_papers):
-        """
-        IDCG which is calculated as a sum over top k best predicted papers. Independent of a user. Top k papers are sorted 
-        by prediction (DESC). Then, for each paper in the topk best papers, it is added ((2^prediction - 1)/(log(2, position of the paper in the list + 1))
-
-        :return: IDCG
-        """
-        # sort by prediction
-        sorted_best_k_papers = sorted(best_k_papers, key=lambda tup: -tup[1])
-        i = 1
-        sum = 0;
-        for paper_id, prediction in sorted_best_k_papers:
-            sum += (math.pow(2, prediction) - 1) / (math.log2(i + 1))
-            i += 1
-        return sum
+            idcg += 1 / (math.log2(position + 1))
+            position += 1
+        return  dcg / idcg
 
     def __calculate_prediction(features, coefficients):
         """
