@@ -45,6 +45,7 @@ def load_reduced_history_data(file_path):
                                  StructField("user_id", IntegerType(), False),
                                  StructField("paper_id", IntegerType(), False)])
     history = spark.read.csv(path=file_path, header=False , schema=history_schema)
+    history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
     return history
 
 def load_reduced_bag_of_words_data(file_path):
@@ -134,11 +135,8 @@ history = load_reduced_history_data("reduced-data/current.csv")
 
 # paper_id, term_occurrence (map)
 bag_of_words = load_reduced_bag_of_words_data("reduced-data/mult.csv")
-bag_of_words.show()
-#
 
 fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                   userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
+#fold_validator.create_folds(history, papers, None, "", timestamp_col="timestamp", fold_period_in_months=6)
 fold_validator.evaluate_folds(spark)
-
-

@@ -25,6 +25,8 @@ class Fold:
     DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
     """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "fold-"
+    """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
+    LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
 
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
@@ -362,6 +364,43 @@ class FoldValidator():
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
         return fold
 
+    def load_test_fold(self, spark, fold_index, distributed=True):
+        """
+        Load a test fold based on its index. Loaded fold which contains test data frame, training data frame and papers corpus.
+        Structure of test and training data frame - (citeulike_paper_id, citeulike_user_hash, timestamp, user_id, paper_id)
+        Structure of papers corpus - (citeulike_paper_id, paper_id)
+
+        :param spark: spark instance used for loading
+        :param fold_index: index of a fold that used for identifying its location
+        :param distributed if the fold was stored in distributed or non-distributed manner
+        :return: loaded fold which contains test data frame, training data frame and papers corpus.
+        """
+        test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
+                                       StructField("citeulike_paper_id", StringType(), False),
+                                       StructField("citeulike_user_hash", StringType(), False),
+                                       StructField("timestamp", TimestampType(), False),
+                                       StructField("paper_id", IntegerType(), False)])
+        # load test data frame
+        test_data_frame = spark.read.csv(Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME, header=False, schema=test_fold_schema)
+        # load training data frame
+        # (name, dataType, nullable)
+        training_fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
+                                           StructField("citeulike_user_hash", StringType(), False),
+                                           StructField("timestamp", TimestampType(), False),
+                                           StructField("user_id", IntegerType(), False),
+                                           StructField("paper_id", IntegerType(), False)])
+        training_data_frame = spark.read.csv(Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME, header=False,
+                                             schema=training_fold_schema)
+        fold = Fold(training_data_frame, test_data_frame)
+        fold.index = fold_index
+        # (name, dataType, nullable)
+        paper_corpus_schema = StructType([StructField("paper_id", StringType(), False),
+                                          StructField("citeulike_paper_id", StringType(), False)])
+        # load papers corpus
+        papers = spark.read.csv(Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME, header=False,
+                                schema=paper_corpus_schema)
+        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+        return fold
 
     def evaluate_folds(self, spark):
         """
@@ -373,10 +412,11 @@ class FoldValidator():
 
         # load folds one by one and evaluate on them
         # total number of fold  - 23
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
             tstart = datetime.datetime.now()
             print(tstart)
-            fold = self.load_fold(spark, i)
+            #fold = self.load_fold(spark, i)
+            fold = self.load_test_fold(spark,i)
             # train a tf idf model using term_occurrences of each paper and paper corpus
             tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
@@ -386,14 +426,14 @@ class FoldValidator():
 
             ltr.fit(fold.training_data_frame)
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-
+            #
             tend = datetime.datetime.now()
             print(tend)
             delta = tend - tstart
             print(delta)
             # TODO only for testing
             # papers_corpus_with_predictions.write.save("predictions-fold-2.csv")
-            #papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+            # papers_corpus_with_predictions = spark.read.load("predictions.parquet")
 
             # EVALUATION
             # extract the raw score for each row
@@ -460,7 +500,7 @@ class FoldEvaluator:
 
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
-
+            candidate_papers_per_user.show()
         elif(self.model_training == LearningToRank.Model_Training.MODEL_PER_USER):
 
             # TODO optimization only users that are part of a test set are needed for evaluation, not all users in the training data set
@@ -495,18 +535,12 @@ class FoldEvaluator:
             evaluation_per_user = evaluation_per_user.withColumn(column_name, UDFContainer.getInstance().recall_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
         # add ndcg
         for k in self.k_ndcg:
-            print("TODO")
-            # papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy("prediction", ascending=False).limit(
-            #     top_k)
-            # top_k_papers_predictions = papers_corpus_with_predictions.rdd.map(
-            #     lambda line: tuple([x for x in line])).collect()
-            # idcg = self.idcg(top_k_papers_predictions)
-            # column_name = "NDCG@" + str(k)
-            # evaluation_columns.append(column_name)
-            #evaluation_per_user = evaluation_per_user.withColumn("ndcg", UDFContainer.getInstance().ndcg_per_user_udf("candidate_papers_set", F.lit(idcg))
+            column_name = "NDCG@" + str(k)
+            evaluation_columns.append(column_name)
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, UDFContainer.getInstance().ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
 
         # store results per fold
-        self.store_fold_results()
+        #self.store_fold_results(fold, evaluation_per_user)
 
         # store overall results
         # compute avg over all columns

@@ -1,9 +1,8 @@
 import os
-import datetime
 from loader import  Loader
+from pyspark.sql.types import *
 from fold_utils import  FoldValidator, FoldSplitter
 from learning_to_rank import PapersPairBuilder, LearningToRank
-
 
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
@@ -20,27 +19,17 @@ papers_mapping = loader.load_papers_mapping("citeulikeId_docId_map.dat")
 
 papers = papers.join(papers_mapping, "citeulike_paper_id")
 
-# Loading history
-history = loader.load_history("current")
-
 # Loading of the (citeulike user hash - user id) mapping
 # format (citeulike_user_hash, user_id)
 user_mappings = loader.load_users_mapping("citeulikeUserHash_userId_map.dat")
-
-# map citeulike_user_hash to user_id
-# format of history (citeulike_paper_id, citeulike_user_hash, timestamp, tag, paper_id, user_id)
-history = history.join(user_mappings, "citeulike_user_hash", "inner")
-
-# map citeulike_paper_id to paper_id
-history = history.join(papers_mapping, "citeulike_paper_id", "inner")
 
 # Loading bag of words for each paper
 # format (paper_id, term_occurrences)
 bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
-fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
-fold_validator.evaluate_folds(spark)
+# fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+#                  userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
+# fold_validator.evaluate_folds(spark)
 
 # splitter = FoldSplitter(spark)
 # #fold = splitter.extract_fold(history, datetime.datetime(2004, 11, 4), 6, timestamp_col="timestamp")

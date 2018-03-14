@@ -45,8 +45,12 @@ class PeerPapersSampler(Transformer):
 
         # because paper ids in the papers_corpus are not sequential, generate a column "paper_id_index" with sequential order
         papers = self.papers_corpus.papers.drop(self.papers_corpus.citeulikePaperId_col)
-        indexed_papers_corpus = papers.withColumn('paper_id_index',
-                                                  F.row_number().over(Window.orderBy(self.papers_corpus.paperId_col)))
+
+        # generate sequential ids for papers, use zipWithIndex to generate ids starting from 0
+        # (name, dataType, nullable)
+        paper_corpus_schema = StructType([StructField("paper_id", IntegerType(), False),
+                                          StructField("paper_id_index", IntegerType(), False)])
+        indexed_papers_corpus = papers.rdd.zipWithIndex().map(lambda x: (int(x[0][0]), x[1])).toDF(paper_corpus_schema)
 
         # add the generated index to each paper in the input data set
         indexed_dataset = dataset.join(indexed_papers_corpus,
