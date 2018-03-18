@@ -137,6 +137,6 @@ history = load_reduced_history_data("reduced-data/current.csv")
 bag_of_words = load_reduced_bag_of_words_data("reduced-data/mult.csv")
 
 fold_validator = FoldValidator(bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                  userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS)
+                  userId_col="user_id", tf_map_col="term_occurrence", model_training=LearningToRank.Model_Training.MODEL_PER_USER)
 #fold_validator.create_folds(history, papers, None, "", timestamp_col="timestamp", fold_period_in_months=6)
 fold_validator.evaluate_folds(spark)

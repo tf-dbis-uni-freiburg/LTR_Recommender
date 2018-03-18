@@ -321,7 +321,8 @@ class LearningToRank(Estimator, Transformer):
             # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
                 # select only records for particular user, only those papers liked by the current user
-                user_dataset = dataset.filter(self.userId_col == userId)
+                unique_user_condition = self.userId_col + "==" +  str(userId[0])
+                user_dataset = dataset.filter(unique_user_condition)
                 # Fit the model over full data set and produce only one model for all users
                 user_lsvcModel = self.train_single_SVM_model(user_dataset)
                 # add the model for the user
@@ -348,22 +349,21 @@ class LearningToRank(Estimator, Transformer):
                                 userId_col=self.userId_col,
                                 output_col="peer_paper_id")
         dataset = nps.transform(dataset)
-
         # add tf paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
-        # get in which column the result of the transform is stored
-        paper_output_column = self.paper_profiles_model.output_col;
+        # get in which columns the result of the transform is stored
+        former_paper_output_column = self.paper_profiles_model.output_col;
+        former_papeId_column = self.paper_profiles_model.paperId_col;
 
-        # add tf paper representation  for peer papers
+        # add tf ids paper representation for peer papers
         self.paper_profiles_model.setPaperIdCol("peer_paper_id")
         self.paper_profiles_model.setOutputCol("peer_paper_tf_idf_vector")
         dataset = self.paper_profiles_model.transform(dataset)
-
         # 2) pair building
         # peer_paper_tf_idf_vector, paper_tf_idf_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
                                               peer_paperId_col="peer_paper_id",
-                                              paper_vector_col=paper_output_column,
+                                              paper_vector_col=former_paper_output_column,
                                               peer_paper_vector_col="peer_paper_tf_idf_vector",
                                               output_col=self.features_col, label_col="label")
 
@@ -372,6 +372,12 @@ class LearningToRank(Estimator, Transformer):
                          labelCol="label")
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
+
+        # return the default columns of the paper profiles model, the model is ready for the training
+        # of the next SVM model
+        self.paper_profiles_model.setPaperIdCol(former_papeId_column)
+        self.paper_profiles_model.setOutputCol(former_paper_output_column)
+
         return lsvcModel
 
     def _transform(self, papers_corpus):
@@ -383,21 +389,26 @@ class LearningToRank(Estimator, Transformer):
         """
         if(self.model_training == self.Model_Training.MODEL_PER_USER):
             papers_corpus_predictions = None
-            for userId, model in self.models:
 
-                self.paper_profiles_model.setPaperIdCol(self.paperId_col)
-                self.paper_profiles_model.setOutputCol(self.features_col)
+            self.paper_profiles_model.setPaperIdCol(self.paperId_col)
+            self.paper_profiles_model.setOutputCol(self.features_col)
+            # add paper representaion to each paper in the corpus
+            papers_corpus = self.paper_profiles_model.transform(papers_corpus)
 
-                # add paper representaion to each paper in the corpus
-                papers_corpus = self.paper_profiles_model.transform(papers_corpus)
+            for userId, model in self.models.items():
                 # make predictions using the model over full papers corpus
                 user_papers_corpus_predictions = model.transform(papers_corpus)
+
                 # add user id to each row to distinguish which model was used for these predictions
                 user_id_df = self.spark.createDataFrame([(userId)], [self.userId_col])
                 user_papers_corpus_predictions = user_papers_corpus_predictions.crossJoin(user_id_df)
-                # add predictions for a user to the final set of predictions
 
-                papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
+                # add predictions for a user to the final set of predictions
+                if(papers_corpus_predictions == None):
+                    papers_corpus_predictions = user_papers_corpus_predictions
+                else:
+                    papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
+
         elif (self.model_training == self.Model_Training.SINGLE_MODEL_ALL_USERS):
             model = self.models[0]
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
