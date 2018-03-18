@@ -20,3 +20,10 @@
 # Splitting the data into folds and storing all 23 folds takes around 10 hours
 # Loading folds and running statistics over then around 20 mins
 # Training a SVM model takes 56 mins over the smallest fold
+
+# Data size(terms_keywords_based): in total 2.13 GB
+- current 1.87 GB
+- papers.csv 163.7 MB
+- mult.dat 67.8 MB
+- citeulikeId_docId_map.dat 2.4 MB
+- citeulikeUserHash_userId_map.dat 1.1 MB
