@@ -2,7 +2,7 @@
 
 - it optimizes the Hinge Loss using the OWLQN optimizer (Only supports L2 regularization)
 
-- init parameters:
+- Init parameters:
 1) **featuresCol** - features column name. Default: ”features”
 2) **labelCol** - label column name. Default: ”label”
 3) **predictionCol** - prediction column name. Default: ”prediction”
@@ -27,7 +27,8 @@ this param could be adjusted to a larger size. Default: 2.
     the aggregation time by an order of magnitude, especially on datasets with a large number of partitions.
     So, in treeReduce and in treeAggregate, the partitions talk to each other in a logarithmic number of rounds.
 
-- **train**(dataset: Dataset[_]): LinearSVCModel
+- Method -> **train**(dataset: Dataset[_]): LinearSVCModel
+Steps:
 
 1. optimizer = new BreezeOWLQN (used OWLQN (Scalable training of L1-regularized log-linear models stat))
 2. initialCoefWithIntercept - DenseVector with zeros for all iterations
@@ -37,7 +38,8 @@ val states = optimizer.iterations(new CachedDiffFunction(costFun),
         initialCoefWithIntercept.asBreeze.toDenseVector)
 ```
 
-3.  For the best state, divide the computed raw coefficient for a feature by its std
+3.  For the best state that an optimizer found, divide the computed raw coefficient for a feature by its std. That's the coefficientVector
+used by the model afterwards.
 
 ```
 /*
@@ -90,8 +92,9 @@ res42: Int = 11
 ```
 # LinearSVCCostFun class
 
-- implements Breeze's DiffFunction[T] for hinge loss function
-- init parameters:
+Used by OWLQN optimizer. Implements Breeze's DiffFunction[T] for hinge loss function.
+
+- Init parameters:
 1) **instances**: RDD
 2) **fitIntercept**: Boolean
 3) **standardization**: Boolean
@@ -99,9 +102,10 @@ res42: Int = 11
 5) **regParamL2**: Double
 6) **aggregationDepth**: Int
 
-- **calculate(coefficients:DenseVector[Double])** :return (Double, DenseVector[Double])
+- Method -> **calculate(coefficients:DenseVector[Double])** :return (Double, DenseVector[Double])
+
 Steps:
-1. !!! broadcast input parameter coefficients (variable bcCoeffs)
+1. > broadcast input parameter coefficients (variable bcCoeffs)
 
 2. create svmAggregator - using LinearSVCAggregator
 - on each partition -> (c: LinearSVCAggregator, instance: Instance) => c.add(instance)
@@ -145,28 +149,28 @@ totalGradientArray(index) += regParamL2 * temp
 value * temp
 ```
 
-5. !!! destroy bcCoeffs (only visible while calculate is executed)
+5. > destroy bcCoeffs (only visible while calculate is executed)
 6. return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
 
 # LinearSVCAggregator class
 
 It computes the gradient and loss for hinge loss function, as used in binary classification for instances in sparse or dense vector in an online fashion.
 Two LinearSVCAggregator can be merged together to have a summary of loss and gradient of the corresponding joint dataset. This class standardizes
-feature values during computation using bcFeaturesStd (broadcasted std array for each feature)
+feature values during computation using bcFeaturesStd (broadcasted std array for each feature). Used by LinearSVCCostFun class.
 
-- init parameters:
+- Init parameters:
 1. **bcCoefficients**: Broadcast[Vector] broadcasted coefficients
 2. **fitIntercept**: Boolean
 4. **bcFeaturesStd**: Broadcast[Array[Double]] - broadcasted std over features of instances
 
-- private variables
+- Private variables
 1. weightSum: Double = 0.0
 2. lossSum: Double = 0.0
 3. coefficientsArray = bcCoefficients.value
 4. gradientSumArray = new Array[Double](numFeaturesPlusIntercept)
 
 > Method that is done over instance on one partition/executor. Add a new training instance to this LinearSVCAggregator, and update the loss and gradient of the objective function.
-- **add(instance: Instance):** :return this.type
+- Method -> **add(instance: Instance):** :return this.type
 
     1. compute dotProduct variable - for each feature(if std for the featire is not 0.0 and the feature value is not 0.0) of the Instance add to the dotProduct
     ((broadcasted coefficient for this featire * value of the feature) / std of the feature)
@@ -211,7 +215,7 @@ if (1.0 > labelScaled * dotProduct) {
 > Method that is done for merging results for two partitions/executor. Merge another LinearSVCAggregator, and update the loss and gradient of the objective function.
     (Note that it's in place merging; as a result, `this` object will be modified.
 
-- **merge(other: LinearSVCAggregator)** :return this.type
+- Method -> **merge(other: LinearSVCAggregator)** :return this.type
     1. Update the weightSum by summing with the weightSum of the other LinearSVCAggregator
     2. Update the lossSum by summing with the lossSum of the other LinearSVCAggregator
     3. Update gradientSumArray by adding other.gradientSumArray
@@ -230,12 +234,12 @@ if (other.weightSum != 0.0) {
    }
 }
 ```
-- **loss()** :return Double
+- Method -> **loss()** :return Double
 ```
 if (weightSum != 0) lossSum / weightSum else 0.0
 ```
 
-- **gradient()** :return Vector
+- Method -> **gradient()** :return Vector
 
 1. if something was calculated in LinearSVCAggregator (weightSum != 0), return gradientVector computed in the aggregator scaled by 1/#number of instances calculated in the aggregator
 
