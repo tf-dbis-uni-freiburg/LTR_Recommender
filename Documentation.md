@@ -1,25 +1,25 @@
 # LinearSVC implementation in Spark
 
-- param threshold - this threshold is applied to the rawPrediction, default is 0.0
 - it optimizes the Hinge Loss using the OWLQN optimizer (Only supports L2 regularization)
+
 - Parameters:
-1) featuresCol - features column name. Default: ”features”
-2) labelCol - label column name. Default: ”label”
-3) predictionCol - prediction column name. Default: ”prediction”
-4) maxIter - max number of iterations (>= 0). Default: 100
-5) regParam - regularization parameter (>= 0). Default: 0.0
-6) tol - the convergence tolerance for iterative algorithms (>= 0). Smaller values will lead to higher accuracy at the cost of more iterations.
+1) **featuresCol** - features column name. Default: ”features”
+2) **labelCol** - label column name. Default: ”label”
+3) **predictionCol** - prediction column name. Default: ”prediction”
+4) **maxIter** - max number of iterations (>= 0). Default: 100
+5) **regParam** - regularization parameter (>= 0). Default: 0.0
+6) **tol** - the convergence tolerance for iterative algorithms (>= 0). Smaller values will lead to higher accuracy at the cost of more iterations.
 Default: 1e-6
-7) rawPredictionCol - raw prediction (a.k.a. confidence) column name. Default: ”rawPrediction”
-8) fitIntercept - whether to fit an intercept term. Default: True
-9) standardization - whether to standardize the training features before fitting the model. Default:True
-10) threshold - The threshold in binary classification applied to the linear model prediction. This threshold can be any real number,
+7) **rawPredictionCol** - raw prediction (a.k.a. confidence) column name. Default: ”rawPrediction”
+8) **fitIntercept** - whether to fit an intercept term. Default: True
+9) **standardization** - whether to standardize the training features before fitting the model. Default:True
+10) **threshold** - The threshold in binary classification applied to the linear model prediction. This threshold can be any real number,
 where Inf will make all predictions 0.0 and -Inf will make all predictions 1.0. If rawPrediction[1] > threshold, prediction 1; otherwise prediction 0.
 Default value: 0.0
-11) weightCol - weight column name. If this is not set or empty, we treat all instance weights as 1.0. Default: None
-12) aggregationDepth- suggested depth for treeAggregate (>= 2). If the dimensions of features or the number of partitions are large,
+11) **weightCol** - weight column name. If this is not set or empty, we treat all instance weights as 1.0. Default: None
+12) **aggregationDepth**- suggested depth for treeAggregate (>= 2). If the dimensions of features or the number of partitions are large,
 this param could be adjusted to a larger size. Default: 2.
-    ! TreeReduce and TreeAggregate - In a regular reduce or aggregate functions in Spark (and the original MapReduce) all partitions have to send
+    > ! TreeReduce and TreeAggregate - In a regular reduce or aggregate functions in Spark (and the original MapReduce) all partitions have to send
     their reduced value to the driver machine, and that machine spends linear time on the number of partitions (due to the CPU cost in merging partial results
     and the network bandwidth limit). It becomes a bottleneck when there are many partitions and the data from each partition is big. Since Spark 1.1 was
     introduced a new aggregation communication pattern based on multi-level aggregation trees. In this setup, data are combined partially on a small set of
@@ -28,8 +28,9 @@ this param could be adjusted to a larger size. Default: 2.
     So, in treeReduce and in treeAggregate, the partitions talk to each other in a logarithmic number of rounds.
 
 # RDD treeAggregate
-    Computes the same thing as aggregate, except it aggregates the elements of the RDD in a multi-level tree pattern. Another difference is that it does not use the initial value for the second reduce function (combOp).
-    By default a tree of depth 2 is used, but this can be changed via the depth parameter.
+Computes the same thing as aggregate, except it aggregates the elements of the RDD in a multi-level tree pattern.
+Another difference is that it does not use the initial value for the second reduce function (combOp).
+By default a tree of depth 2 is used, but this can be changed via the depth parameter.
 
 - Listing Variants:
     def treeAggregate[U](zeroValue: U)(seqOp: (U, T) ⇒ U, combOp: (U, U) ⇒ U, depth: Int = 2)(implicit arg0: ClassTag[U]): U
@@ -62,13 +63,14 @@ res42: Int = 11
 
 - implements Breeze's DiffFunction[T] for hinge loss function
 - parameters:
-    1) instances: RDD
-    2) fitIntercept: Boolean
-    3) standardization: Boolean
-    4) bcFeaturesStd: Broadcast[Array[Double]] - broadcasted std over features of instances
-    5) regParamL2: Double
-    6) aggregationDepth: Int
-- calculate(coefficients:DenseVector[Double])
+1) **instances**: RDD
+2) **fitIntercept**: Boolean
+3) **standardization**: Boolean
+4) **bcFeaturesStd**: Broadcast[Array[Double]] - broadcasted std over features of instances
+5) **regParamL2**: Double
+6) **aggregationDepth**: Int
+
+- **calculate(coefficients:DenseVector[Double])**
     :return (Double, DenseVector[Double])
     1) !!! broadcast input parameter coefficients (variable bcCoeffs)
 
@@ -84,13 +86,17 @@ res42: Int = 11
             for each coefficients (index, value) (not from the broadcasted, from the input coeffs)
                 4.2.1) if standardization
                         - update gradient for the coefficient by adding the multiplication of regParamL2 and the computed coefficient
+
                          ```scala
                          totalGradientArray(index) += regParamL2 * value
                          ```
+
                          - add to the sum square of the coefficient
+
                          ```scala
                          sum += value * value
                          ```
+
                 4.2.1) if no standardization - we still standardize the data to improve the rate of convergence; as a result, we have to perform this reverse standardization by penalizing each component
                 differently to get effectively the same objective function when the training dataset is not standardized.
                       4.2.1.1) if std for the feature (accessed based on the index of the coeff) == 0.0; add 0.0 to the sum; no update of gradient for this feature
@@ -101,9 +107,9 @@ res42: Int = 11
                       - add to the sum the multiplicaion of coeff value and the computed division
 
                       ```scala
-                        val temp = value / (featuresStd(index) * featuresStd(index))
-                        totalGradientArray(index) += regParamL2 * temp
-                        value * temp
+                       val temp = value / (featuresStd(index) * featuresStd(index))
+                       totalGradientArray(index) += regParamL2 * temp
+                       value * temp
                       ```
     4) !!! destroy bcCoeffs (only visible while calculate is executed)
     5) return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
