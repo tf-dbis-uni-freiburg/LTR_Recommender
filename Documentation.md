@@ -86,13 +86,13 @@ Steps:
 - calculation of sum variable
      for each coefficients (index, value) (not from the broadcasted, from the input coeffs)
          4.2.1. if standardization
-            - update gradient for the coefficient by adding the multiplication of regParamL2 and the computed coefficient
+            4.2.1.1. update gradient for the coefficient by adding the multiplication of regParamL2 and the computed coefficient
 
                 ```
                 totalGradientArray(index) += regParamL2 * value
                 ```
 
-             - add to the sum square of the coefficient
+            4.2.1.2. add to the sum square of the coefficient
 
                 ```
                 sum += value * value
@@ -100,18 +100,18 @@ Steps:
 
           4.2.2. if no standardization - we still standardize the data to improve the rate of convergence; as a result, we have to perform this reverse standardization by penalizing each component
                 differently to get effectively the same objective function when the training dataset is not standardized.
-                4.2.2.1) if std for the feature (accessed based on the index of the coeff) == 0.0; add 0.0 to the sum; no update of gradient for this feature
+            4.2.2.1) if std for the feature (accessed based on the index of the coeff) == 0.0; add 0.0 to the sum; no update of gradient for this feature
                 else
-                4.2.2.2)
-                 - divide the coeff value by square of its std
-                 - update the coeff gradient by adding the multiplication of the computed dividion and the regParamL2
-                 - add to the sum the multiplicaion of coeff value and the computed division
+            4.2.2.2)
+               - divide the coeff value by square of its std
+               - update the coeff gradient by adding the multiplication of the computed dividion and the regParamL2
+               - add to the sum the multiplicaion of coeff value and the computed division
 
-                 ```
-                 val temp = value / (featuresStd(index) * featuresStd(index))
-                 totalGradientArray(index) += regParamL2 * temp
-                 value * temp
-                 ```
+               ```
+               val temp = value / (featuresStd(index) * featuresStd(index))
+               totalGradientArray(index) += regParamL2 * temp
+               value * temp
+               ```
 
 5. !!! destroy bcCoeffs (only visible while calculate is executed)
 6. return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
