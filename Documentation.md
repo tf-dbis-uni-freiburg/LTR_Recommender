@@ -2,7 +2,7 @@
 
 - it optimizes the Hinge Loss using the OWLQN optimizer (Only supports L2 regularization)
 
-- Parameters:
+- init parameters:
 1) **featuresCol** - features column name. Default: ”features”
 2) **labelCol** - label column name. Default: ”label”
 3) **predictionCol** - prediction column name. Default: ”prediction”
@@ -62,7 +62,7 @@ res42: Int = 11
 # LinearSVCCostFun class
 
 - implements Breeze's DiffFunction[T] for hinge loss function
-- parameters:
+- init parameters:
 1) **instances**: RDD
 2) **fitIntercept**: Boolean
 3) **standardization**: Boolean
@@ -82,36 +82,33 @@ Steps:
 3. take -> totalGradientArray = svmAggregator.gradient.toArray; gradient array computed by svmAggregator
 4. calculate regVal - regVal is the sum of coefficients squares excluding intercept for L2 regularization
 
- 4.1. regVal = 0.0 if(regParamL2 == 0.0) else: 0.5 * regParamL2 * sum
+4.1. regVal = 0.0 if(regParamL2 == 0.0) else: 0.5 * regParamL2 * sum
 
- 4.2. calculation of sum variable
+4.2. calculation of sum variable
 
-for each coefficients (index, value) (not from the broadcasted, from the input coeffs)
+    for each coefficients (index, value) (not from the broadcasted, from the input coeffs)
 
-4.2.1. if standardization
+        4.2.1. if standardization
 
-4.2.1.1. update gradient for the coefficient by adding the multiplication of regParamL2 and the computed coefficient
+           - update gradient for the coefficient by adding the multiplication of regParamL2 and the computed coefficient
 
 ```
 totalGradientArray(index) += regParamL2 * value
 ```
 
-4.2.1.2. add to the sum square of the coefficient
+           - add to the sum square of the coefficient
 
 ```
 sum += value * value
 ```
 
-4.2.2. if no standardization - we still standardize the data to improve the rate of convergence; as a result, we have to perform this reverse standardization by penalizing each component
+       4.2.2. if no standardization - we still standardize the data to improve the rate of convergence; as a result, we have to perform this reverse standardization by penalizing each component
 differently to get effectively the same objective function when the training dataset is not standardized.
-
-4.2.2.1. if std for the feature (accessed based on the index of the coeff) == 0.0; add 0.0 to the sum; no update of gradient for this feature
-else
-
-4.2.2.2.
-- divide the coeff value by square of its std
-- update the coeff gradient by adding the multiplication of the computed dividion and the regParamL2
-- add to the sum the multiplicaion of coeff value and the computed division
+        - if std for the feature (accessed based on the index of the coeff) == 0.0; add 0.0 to the sum; no update of gradient for this feature
+        else
+            - divide the coeff value by square of its std
+            - update the coeff gradient by adding the multiplication of the computed dividion and the regParamL2
+            - add to the sum the multiplicaion of coeff value and the computed division
 
 ```
 val temp = value / (featuresStd(index) * featuresStd(index))
@@ -123,9 +120,97 @@ value * temp
 6. return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
 
 # LinearSVCAggregator class
-
 It computes the gradient and loss for hinge loss function, as used in binary classification for instances in sparse or dense vector in an online fashion.
 Two LinearSVCAggregator can be merged together to have a summary of loss and gradient of the corresponding joint dataset. This class standardizes
-feature values during computation using bcFeaturesStd.
-It has
+feature values during computation using bcFeaturesStd (broadcasted std array for each feature)
+
+- init parameters:
+1. **bcCoefficients**: Broadcast[Vector] broadcasted coefficients
+2. **fitIntercept**: Boolean
+4. **bcFeaturesStd**: Broadcast[Array[Double]] - broadcasted std over features of instances
+
+- private variables
+1. weightSum: Double = 0.0
+2. lossSum: Double = 0.0
+3. coefficientsArray = bcCoefficients.value
+4. gradientSumArray = new Array[Double](numFeaturesPlusIntercept)
+
+> Method that is done over instance on one partition/executor. Add a new training instance to this LinearSVCAggregator, and update the loss and gradient of the objective function.
+- **add(instance: Instance):** :return this.type
+    1. compute dotProduct variable - for each feature(if std for the featire is not 0.0 and the feature value is not 0.0) of the Instance add to the dotProduct
+    ((broadcasted coefficient for this featire * value of the feature) / std of the feature)
+```
+if (localFeaturesStd(index) != 0.0 && value != 0.0) {
+sum += localCoefficients(index) * value / localFeaturesStd(index)
+}
+```
+    2. Our loss function with {0, 1} labels is max(0, 1 - (2y - 1) (f_w(x))). Therefore the gradient is -(2y - 1)*x. Compute loss using the calculated dotProduct (f_w(x)))
+
+```
+val labelScaled = 2 * label - 1.0
+val loss = if (1.0 > labelScaled * dotProduct) {
+  weight * (1.0 - labelScaled * dotProduct)
+} else {
+  0.0
+ }}
+```
+
+    3. If there is a loss form this instance, update the gradient for this instance; gradientScale = -(2y - 1); For each feature, update the add to the gradient sum for this feature
+    ((value of the feature) * gradientScale)/ std for this feature
+
+```
+if (1.0 > labelScaled * dotProduct) {
+    val gradientScale = -labelScaled * weight
+    features.foreachActive { (index, value) =>
+     if (localFeaturesStd(index) != 0.0 && value != 0.0) {
+        localGradientSumArray(index) += value * gradientScale / localFeaturesStd(index)
+      }
+    }
+    if (fitIntercept) {
+      localGradientSumArray(localGradientSumArray.length - 1) += gradientScale
+    }
+}
+```
+
+    4. update the overall loss by adding of loss for this instance
+    5. update the overall weightSum by adding weight of the instance. In our case each instance has weight one. So weightSum for a LinearSVCAggregator is equal to the number of its instances.
+
+> Method that is done for merging results for two partitions/executor. Merge another LinearSVCAggregator, and update the loss and gradient of the objective function.
+    (Note that it's in place merging; as a result, `this` object will be modified.
+
+- **merge(other: LinearSVCAggregator)** :return this.type
+    1. Update the weightSum by summing with the weightSum of the other LinearSVCAggregator
+    2. Update the lossSum by summing with the lossSum of the other LinearSVCAggregator
+    3. Update gradientSumArray by adding other.gradientSumArray
+```
+if (other.weightSum != 0.0) {
+   weightSum += other.weightSum
+   lossSum += other.lossSum
+
+   var i = 0
+   val localThisGradientSumArray = this.gradientSumArray
+   val localOtherGradientSumArray = other.gradientSumArray
+   val len = localThisGradientSumArray.length
+   while (i < len) {
+    localThisGradientSumArray(i) += localOtherGradientSumArray(i)
+    i += 1
+   }
+}
+```
+- **loss()** :return Double
+```
+if (weightSum != 0) lossSum / weightSum else 0.0
+```
+
+- **gradient()** :return Vector
+
+1. if something was calculated in LinearSVCAggregator (weightSum != 0), return gradientVector computed in the aggregator scaled by 1/#number of instances calculated in the aggregator
+
+```
+val result = Vectors.dense(gradientSumArray.clone())
+scal(1.0 / weightSum, result)]
+```
+
+2. Otherwise: Empty DenseVector
+
 # optimizer - OWLQN (Scalable training of L1-regularized log-linear models stat)
