@@ -27,6 +27,35 @@ this param could be adjusted to a larger size. Default: 2.
     the aggregation time by an order of magnitude, especially on datasets with a large number of partitions.
     So, in treeReduce and in treeAggregate, the partitions talk to each other in a logarithmic number of rounds.
 
+- **train**(dataset: Dataset[_]): LinearSVCModel
+
+1. optimizer = new BreezeOWLQN (used OWLQN (Scalable training of L1-regularized log-linear models stat))
+2. initialCoefWithIntercept - DenseVector with zeros for all iterations
+
+```
+val states = optimizer.iterations(new CachedDiffFunction(costFun),
+        initialCoefWithIntercept.asBreeze.toDenseVector)
+```
+
+3.  For the best state, divide the computed raw coefficient for a feature by its std
+
+```
+/*
+The coefficients are trained in the scaled space; we're converting them back to
+the original space.
+Note that the intercept in scaled space and original space is the same;
+as a result, no scaling is needed.
+*/
+val rawCoefficients = state.x.toArray
+val coefficientArray = Array.tabulate(numFeatures) { i =>
+    if (featuresStd(i) != 0.0) {
+       rawCoefficients(i) / featuresStd(i)
+    } else {
+       0.0
+    }
+}
+```
+
 # RDD treeAggregate
 Computes the same thing as aggregate, except it aggregates the elements of the RDD in a multi-level tree pattern.
 Another difference is that it does not use the initial value for the second reduce function (combOp).
@@ -120,6 +149,7 @@ value * temp
 6. return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
 
 # LinearSVCAggregator class
+
 It computes the gradient and loss for hinge loss function, as used in binary classification for instances in sparse or dense vector in an online fashion.
 Two LinearSVCAggregator can be merged together to have a summary of loss and gradient of the corresponding joint dataset. This class standardizes
 feature values during computation using bcFeaturesStd (broadcasted std array for each feature)
@@ -137,6 +167,7 @@ feature values during computation using bcFeaturesStd (broadcasted std array for
 
 > Method that is done over instance on one partition/executor. Add a new training instance to this LinearSVCAggregator, and update the loss and gradient of the objective function.
 - **add(instance: Instance):** :return this.type
+
     1. compute dotProduct variable - for each feature(if std for the featire is not 0.0 and the feature value is not 0.0) of the Instance add to the dotProduct
     ((broadcasted coefficient for this featire * value of the feature) / std of the feature)
 ```
@@ -144,7 +175,9 @@ if (localFeaturesStd(index) != 0.0 && value != 0.0) {
 sum += localCoefficients(index) * value / localFeaturesStd(index)
 }
 ```
+
     2. Our loss function with {0, 1} labels is max(0, 1 - (2y - 1) (f_w(x))). Therefore the gradient is -(2y - 1)*x. Compute loss using the calculated dotProduct (f_w(x)))
+
 
 ```
 val labelScaled = 2 * label - 1.0
@@ -213,4 +246,5 @@ scal(1.0 / weightSum, result)]
 
 2. Otherwise: Empty DenseVector
 
-# optimizer - OWLQN (Scalable training of L1-regularized log-linear models stat)
+# OWLQN class (Scalable training of L1-regularized log-linear models stat)
+TODO - read the paper and add notes for the optimizer
