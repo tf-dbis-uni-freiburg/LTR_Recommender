@@ -1,6 +1,6 @@
 # LinearSVC implementation in Spark
 
-- it optimizes the Hinge Loss using the OWLQN optimizer (Only supports L2 regularization)
+It optimizes the Hinge Loss using the OWLQN optimizer (Only supports L2 regularization)
 
 - Init parameters:
 1) **featuresCol** - features column name. Default: ”features”
@@ -63,8 +63,8 @@ Computes the same thing as aggregate, except it aggregates the elements of the R
 Another difference is that it does not use the initial value for the second reduce function (combOp).
 By default a tree of depth 2 is used, but this can be changed via the depth parameter.
 
-- Listing Variants:
-    def treeAggregate[U](zeroValue: U)(seqOp: (U, T) ⇒ U, combOp: (U, U) ⇒ U, depth: Int = 2)(implicit arg0: ClassTag[U]): U
+- Method ->
+    def **treeAggregate**[U](zeroValue: U)(seqOp: (U, T) ⇒ U, combOp: (U, U) ⇒ U, depth: Int = 2)(implicit arg0: ClassTag[U]): U
 
 - Example:
 ```scala
@@ -105,7 +105,7 @@ Used by OWLQN optimizer. Implements Breeze's DiffFunction[T] for hinge loss func
 - Method -> **calculate(coefficients:DenseVector[Double])** :return (Double, DenseVector[Double])
 
 Steps:
-1. > broadcast input parameter coefficients (variable bcCoeffs)
+1. broadcast input parameter coefficients (variable bcCoeffs)
 
 2. create svmAggregator - using LinearSVCAggregator
 - on each partition -> (c: LinearSVCAggregator, instance: Instance) => c.add(instance)
@@ -149,7 +149,7 @@ totalGradientArray(index) += regParamL2 * temp
 value * temp
 ```
 
-5. > destroy bcCoeffs (only visible while calculate is executed)
+5. destroy bcCoeffs (only visible while calculate is executed)
 6. return (svmAggregator.loss + regVal, new BDV(totalGradientArray)); return calculated loss + regulation value, and DenseVector of gradients
 
 # LinearSVCAggregator class
@@ -169,8 +169,10 @@ feature values during computation using bcFeaturesStd (broadcasted std array for
 3. coefficientsArray = bcCoefficients.value
 4. gradientSumArray = new Array[Double](numFeaturesPlusIntercept)
 
-> Method that is done over instance on one partition/executor. Add a new training instance to this LinearSVCAggregator, and update the loss and gradient of the objective function.
 - Method -> **add(instance: Instance):** :return this.type
+> Method that is done over instance on one partition/executor. Add a new training instance to this LinearSVCAggregator, and update the loss and gradient of the objective function.
+
+Steps:
 
     1. compute dotProduct variable - for each feature(if std for the featire is not 0.0 and the feature value is not 0.0) of the Instance add to the dotProduct
     ((broadcasted coefficient for this featire * value of the feature) / std of the feature)

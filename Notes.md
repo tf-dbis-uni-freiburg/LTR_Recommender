@@ -17,9 +17,10 @@
 ## Found invalid values for "month" in papers.csv
 - Jun-Sep, MarMar, {, FebMar, JanAug-JanSep, Dec--JanMay\~{, FebFeb--FebJun, FebFeb, Jun--FebAug\~{
 
-# Splitting the data into folds and storing all 23 folds takes around 10 hours
-# Loading folds and running statistics over then around 20 mins
-# Training a SVM model takes 56 mins over the smallest fold
+# Local Mode: Splitting the data into folds and storing all 23 folds takes around 10 hours
+# Local Mode: Loading folds and running statistics over then around 20 mins
+# Local Mode: Training a singe SVM model for all users takes 56 mins over the first fold
+# Local Mode: Training a singe SVM model for one user ()
 
 # Data size(terms_keywords_based): in total 2.13 GB
 - current 1.87 GB
