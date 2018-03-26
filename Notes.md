@@ -28,3 +28,5 @@
 - mult.dat 67.8 MB
 - citeulikeId_docId_map.dat 2.4 MB
 - citeulikeUserHash_userId_map.dat 1.1 MB
+
+# Creating and storing folds on the cluster - 1.2h
