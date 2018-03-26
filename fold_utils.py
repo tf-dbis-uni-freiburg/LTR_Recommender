@@ -24,11 +24,11 @@ class Fold:
     """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.csv"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
-    DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
+    DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-folds/fold-"
     """ Prefix of the name of the folder in which the fold is stored. """
-    PREFIX_FOLD_FOLDER_NAME = "fold-"
+    PREFIX_FOLD_FOLDER_NAME = "folds/fold-"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
-    LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
+    LOCAL_PREFIX_FOLD_FOLDER_NAME = "folds/local-distributed-fold-"
 
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
@@ -104,7 +104,7 @@ class Fold:
         if(distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.TEST_DF_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
 
     @staticmethod
     def get_training_data_frame_path(fold_index, distributed=True):
@@ -120,7 +120,7 @@ class Fold:
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.TRAINING_DF_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
 
     @staticmethod
     def get_papers_corpus_frame_path(fold_index, distributed=True):
@@ -136,7 +136,7 @@ class Fold:
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "-" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
 
     @staticmethod
     def get_evaluation_results_frame_path(fold_index, distributed=True):
@@ -434,12 +434,14 @@ class FoldValidator():
             tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            start = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
 
             ltr.fit(fold.training_data_frame)
+            print(datetime.datetime.now() - start)
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-            
+
             # TODO only for testing
             # papers_corpus_with_predictions.write.save("predictions-fold-2.csv")
             # papers_corpus_with_predictions = spark.read.load("predictions.parquet")
