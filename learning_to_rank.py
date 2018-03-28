@@ -160,9 +160,7 @@ class PapersPairBuilder(Transformer):
             positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
 
             positive_class_per_paper = positive_class_per_paper.select(self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
-            # fix this
-            positive_class_dataset = dataset.join(positive_class_per_paper, (positive_class_per_paper[self.peer_paperId_col] == dataset[self.peer_paperId_col])
-                                                                        & (positive_class_per_paper[self.paperId_col] == dataset[self.paperId_col]) )
+            positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(
@@ -173,9 +171,8 @@ class PapersPairBuilder(Transformer):
             # negative label 0
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
             negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(self.peer_paperId_col))
-            negative_class_dataset = dataset.join(negative_class_per_paper, (negative_class_per_paper[self.peer_paperId_col] == dataset[self.peer_paperId_col]) \
-                                                    & (negative_class_per_paper[self.paperId_col] == dataset[self.paperId_col]))
-
+            negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+        
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(self.peer_paper_vector_col,
                                                             self.paper_vector_col))
@@ -209,6 +206,7 @@ class PapersPairBuilder(Transformer):
         return dataset
 
 class LearningToRank(Estimator, Transformer):
+
     """
     Class that implements different approaches of learning to rank algorithms. 
     Learning to Rank algorithm includes 3 phases:
