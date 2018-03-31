@@ -3,7 +3,7 @@ import pyspark.sql.functions as F
 from loader import Loader
 from pyspark.sql.types import *
 from fold_utils import  FoldValidator
-from learning_to_rank import PapersPairBuilder, LearningToRank
+from learning_to_rank_spark2 import PapersPairBuilder, LearningToRank
 
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
@@ -127,11 +127,12 @@ def load_bag_of_words_per_paper(path):
     bag_of_words_per_paper = bag_of_words_per_paper_rdd.toDF(bag_of_word_schema)
     return bag_of_words_per_paper
 
-# Loading reduced set of papers
-papers = load_reduced_paper_data("reduced-data/papers.csv")
-
-# Loading reduced history data
-history = load_reduced_history_data("reduced-data/current.csv")
+# # Loading reduced set of papers
+# papers = load_reduced_paper_data("reduced-data/papers.csv")
+#
+# # Loading reduced history data
+# history = load_reduced_history_data("reduced-data/current.csv")
+#
 
 # paper_id, term_occurrence (map)
 bag_of_words = load_reduced_bag_of_words_data("reduced-data/mult.csv")
