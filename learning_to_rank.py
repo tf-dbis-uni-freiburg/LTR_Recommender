@@ -172,7 +172,6 @@ class PapersPairBuilder(Transformer):
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
             negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(self.peer_paperId_col))
             negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
-        
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(self.peer_paper_vector_col,
                                                             self.paper_vector_col))

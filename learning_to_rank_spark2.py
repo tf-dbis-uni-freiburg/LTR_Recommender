@@ -337,6 +337,7 @@ class LearningToRank(Estimator, Transformer):
 
             # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
+
                 # select only records for particular user, only those papers liked by the current user
                 unique_user_condition = self.userId_col + "==" + str(userId[0])
                 user_dataset = dataset.filter(unique_user_condition)
@@ -397,10 +398,6 @@ class LearningToRank(Estimator, Transformer):
         # Build the model
         lsvcModel = SVMWithSGD.train(labeled_data_points, iterations=10)
 
-        # Evaluating the model on training data
-        labelsAndPreds = labeled_data_points.map(lambda p: (p.label, lsvcModel.predict(p.features)))
-        trainErr = labelsAndPreds.filter(lambda lp: lp[0] != lp[1]).count() / float(labeled_data_points.count())
-
         # return the default columns of the paper profiles model, the model is ready for the training
         # of the next SVM model
         self.paper_profiles_model.setPaperIdCol(former_papeId_column)
@@ -420,12 +417,28 @@ class LearningToRank(Estimator, Transformer):
 
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
             self.paper_profiles_model.setOutputCol(self.features_col)
-            # add paper representaion to each paper in the corpus
+            # add paper representation to each paper in the corpus
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
 
             for userId, model in self.models.items():
                 # make predictions using the model over full papers corpus
-                user_papers_corpus_predictions = model.transform(papers_corpus)
+                # make predictions using the model over full papers corpus
+                papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
+
+                # set threshold to NONE to receive raw predictions from the model
+                model._threshold = None
+                user_papers_corpus_predictions_rdd = papers_corpus.rdd.map(
+                    lambda p: (p.paper_id, p.citeulike_paper_id, float(model.predict(p.features))))
+
+                # convert RDD to Data frame
+                # Load papers into DF
+                prediction_scheme = StructType([
+                    #  name, dataType, nullable
+                    StructField("paper_id", IntegerType(), False),
+                    StructField("citeulike_paper_id", StringType(), True),
+                    StructField("ranking_score", FloatType(), True)
+                ])
+                user_papers_corpus_predictions = user_papers_corpus_predictions_rdd.toDF(prediction_scheme)
 
                 # add user id to each row to distinguish which model was used for these predictions
                 user_id_df = self.spark.createDataFrame([(userId)], [self.userId_col])
@@ -446,7 +459,21 @@ class LearningToRank(Estimator, Transformer):
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
 
             # make predictions using the model over full papers corpus
-            papers_corpus_predictions = model.transform(papers_corpus)
+            papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
+
+            # set threshold to NONE to receive raw predictions from the model
+            model._threshold = None
+            papers_corpus_predictions = papers_corpus.rdd.map(lambda p: (p.paper_id, p.citeulike_paper_id, float(model.predict(p.features))))
+
+            # convert RDD to Data frame
+            # Load papers into DF
+            prediction_scheme = StructType([
+                #  name, dataType, nullable
+                StructField("paper_id", IntegerType(), False),
+                StructField("citeulike_paper_id", StringType(), True),
+                StructField("ranking_score", FloatType(), True)
+            ])
+            papers_corpus_predictions = papers_corpus_predictions.toDF(prediction_scheme)
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')

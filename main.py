@@ -7,7 +7,7 @@ import argparse
 
 # make sure pyspark tells workers to use python3 not 2 if both are installed
 # uncomment only during development
-os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
+#os.environ['PYSPARK_PYTHON'] = '/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5'
 
 # parse input parameters
 parser = argparse.ArgumentParser(description='Process parameters needed to run the program.')

@@ -1,8 +1,9 @@
 from dateutil.relativedelta import relativedelta
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
-from learning_to_rank import *
+from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
+from pyspark.sql.window import Window
 
 class Fold:
     """
@@ -28,7 +29,7 @@ class Fold:
     """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "folds/fold-"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
-    LOCAL_PREFIX_FOLD_FOLDER_NAME = "folds/local-distributed-fold-"
+    LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
 
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
@@ -101,6 +102,7 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
+        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
         if(distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
         else:
@@ -117,6 +119,7 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
+        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
         else:
@@ -133,6 +136,7 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
+        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
         else:
@@ -150,9 +154,9 @@ class Fold:
         :return: path to the file/folder
         """
         if (distributed):
-            return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
         else:
-            return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/test-" + Fold.RESULTS_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
 
 class FoldSplitter:
     """
@@ -425,34 +429,76 @@ class FoldValidator():
         
         :param spark: spark instance used for loading the folds
         """
-
         # load folds one by one and evaluate on them
         # total number of fold  - 23
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
+            # write a file for all folds, it contains a row per fold
+            file = open("execution.txt", "a")
+            file.write("fold " + str(i) + "\n")
+            file.close()
+
+            # loading the fold
+            loadingTheFold = datetime.datetime.now()
             fold = self.load_fold(spark, i)
+            # fold.papers_corpus.papers = fold.papers_corpus.papers.limit(100)
+            # fold.training_data_frame = fold.training_data_frame.limit(500)
+            # fold.test_data_frame = fold.test_data_frame.limit(500)
+
+            lf = datetime.datetime.now() - loadingTheFold
+            file = open("execution.txt", "a")
+            file.write("Loading the fold " + str(lf) + "\n")
+            file.close()
+
+            # training TF IDF
+            trainingTFIDF = datetime.datetime.now()
             # train a tf idf model using term_occurrences of each paper and paper corpus
             tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
             tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-            start = datetime.datetime.now()
+            tTFIDF = datetime.datetime.now() - trainingTFIDF
+            file = open("execution.txt", "a")
+            file.write("Training TD IDF " + str(tTFIDF) + "\n")
+            file.close()
+
+            # Training LTR
+            ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
-
             ltr.fit(fold.training_data_frame)
-            print(datetime.datetime.now() - start)
+
+            lrt = datetime.datetime.now() - ltrTraining
+            file = open("execution.txt", "a")
+            file.write("Training LTR, type " + str(self.model_training) + " Time: "+ str(lrt) + "\n")
+            file.close()
+
+            # predictiong by LTR
+            ltrPrediction = datetime.datetime.now()
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
+
+            ltrPr = datetime.datetime.now() - ltrPrediction
+            file = open("execution.txt", "a")
+            file.write("Prediction LTR:" + str(ltrPr) + "\n")
+            file.close()
 
             # TODO only for testing
             # papers_corpus_with_predictions.write.save("predictions-fold-2.csv")
             # papers_corpus_with_predictions = spark.read.load("predictions.parquet")
 
-            # EVALUATION
-            # extract the raw score for each row
-            vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
-            papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
-
+            # Evaluation LTR
+            eval = datetime.datetime.now()
+            # # EVALUATION
+            # # TODO uncomment this when using learning_to_rank with DF
+            # # extract the raw score for each row
+            # # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
+            # # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
+            # # print(papers_corpus_with_predictions.take(2))
+            #
             FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
                 .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+            evalTime = datetime.datetime.now() - eval
+            file = open("execution.txt", "a")
+            file.write("Evaluation:" + str(evalTime) + "\n")
+            file.close()
 
 class FoldEvaluator:
     """ 
@@ -561,7 +607,7 @@ class FoldEvaluator:
         for metric_column in evaluation_columns:
             avg = evaluation_per_user.groupBy().agg(F.avg(metric_column)).collect()
             evaluations[metric_column] = avg[0][0]
-        self.append_fold_overall_result(evaluations)
+        self.append_fold_overall_result(fold.index, evaluations)
         return evaluation_per_user
 
     def store_fold_results(self, fold_index,  evaluations_per_user, distributed=True):
@@ -579,15 +625,16 @@ class FoldEvaluator:
         else:
             evaluations_per_user.coalesce(1).write.csv(Fold.get_evaluation_results_frame_path(fold_index, distributed=False), header=True)
 
-    def append_fold_overall_result(self, overall_evaluation):
+    def append_fold_overall_result(self, fold_index, overall_evaluation):
         """
-        
+        TODO add comments
         :param overall_evaluation: 
         :return: 
         """
         # write a file for each fold, it contains a row per user
         file = open(self.RESULTS_CSV_FILENAME, "a")
         line = ""
+        line = line + "| " + str(fold_index)
         for metric_name, metric_value in overall_evaluation.items():
             line = line + "| " + str(metric_value)
         file.write(line)
