@@ -1,10 +1,15 @@
-from pyspark.ml.base import Estimator
-from pyspark.ml.classification import LinearSVC
-from enum import Enum
+from collections import defaultdict
+# from enum import Enum
+from random import randint, shuffle
+
 import pyspark.sql.functions as F
-from spark_utils import *
-from pyspark.sql.window import Window
+from pyspark.ml.base import Estimator
 from pyspark.ml.base import Transformer
+from pyspark.ml.linalg import VectorUDT
+from pyspark.ml.linalg import Vectors
+from pyspark.sql.types import *
+from test_SVM import TestLinearSVC
+
 
 class PeerPapersSampler(Transformer):
     """
@@ -66,9 +71,30 @@ class PeerPapersSampler(Transformer):
         # add list of positive papers per user
         dataset = dataset.join(user_library, self.userId_col)
 
+        # "indexed_positive_papers_per_user"
         # generate peer papers
-        dataset = dataset.withColumn("indexed_peer_papers_per_user", UDFContainer.getInstance()
-                                     .generate_peers_udf("indexed_positive_papers_per_user", F.lit(total_papers_count),
+        def generate_peers(positives, total_papers_count, k):
+            """
+            Generate peers papers for a paper. For example, if a total number of paper is 6, means that in the paper corpus these are the possible paper ids [1, 2, 3, 4, 5, 6].
+            It randomly selects k of them. None of the selected id has to be in "positives" list.
+
+            :param positives: list of paper ids. The intersection of the positives and the generated peers has to be empty.
+            :param total_papers_count: total number of papers in the paper corpus
+            :param k: how many peer papers have to be generated
+            :return: a list of paper ids corresponding to peer papers for a paper
+            """
+            peers = set()
+            while len(peers) < k:
+                candidate = randint(1, total_papers_count + 1)
+                # if a candidate paper is not in positives for an user and there exists paper with such id in the paper corpus
+                if candidate not in positives and candidate not in peers:
+                    peers.add(candidate)
+            return list(peers)
+
+        generate_peers_udf = F.udf(generate_peers, ArrayType(IntegerType()))
+
+        # generate peer papers
+        dataset = dataset.withColumn("indexed_peer_papers_per_user", generate_peers_udf("indexed_positive_papers_per_user", F.lit(total_papers_count),
                                                          F.lit(self.peer_papers_count)))
 
         # drop columns that we have added
@@ -102,19 +128,19 @@ class PapersPairBuilder(Transformer):
     be computed and added wirh class 1. And for the other 50%, (p_p - p) with class 0.
     """
 
-    class Pairs_Generation(Enum):
-        """
-        Enum that contains different approaches for generating pairs. There are three possible values: duplicated_pairs, one_class_pairs, 
-        equally_distributed_pairs. For example, if we have a paper p, and a set of peer papers N for the paper p
-        1) DUPLICATED_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1) and 
-            (p_p - p, class: 0)
-        2) ONE_CLASS_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1)
-        3) EQUALLY_DISTRIBUTED_PAIRS - for 50% of papers in the set N, calculate (p - p_p, class:1), 
-        and for the other 50% (p_p - p, class: 0)
-        """
-        DUPLICATED_PAIRS = 0
-        ONE_CLASS_PAIRS = 1
-        EQUALLY_DISTRIBUTED_PAIRS = 2
+    # class Pairs_Generation(Enum):
+    #     """
+    #     Enum that contains different approaches for generating pairs. There are three possible values: duplicated_pairs, one_class_pairs,
+    #     equally_distributed_pairs. For example, if we have a paper p, and a set of peer papers N for the paper p
+    #     1) DUPLICATED_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1) and
+    #         (p_p - p, class: 0)
+    #     2) ONE_CLASS_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1)
+    #     3) EQUALLY_DISTRIBUTED_PAIRS - for 50% of papers in the set N, calculate (p - p_p, class:1),
+    #     and for the other 50% (p_p - p, class: 0)
+    #     """
+    #     DUPLICATED_PAIRS = 0
+    #     ONE_CLASS_PAIRS = 1
+    #     EQUALLY_DISTRIBUTED_PAIRS = 2
 
     def __init__(self, pairs_generation, paperId_col="paper_id", peer_paperId_col="peer_paper_id",
                  paper_vector_col="paper_vector", peer_paper_vector_col="peer_paper_vector",
@@ -147,14 +173,48 @@ class PapersPairBuilder(Transformer):
 
 
     def _transform(self, dataset):
-        if(self.pairs_generation == self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
+
+        def diff(v1, v2):
+            """
+            Calculate the difference between two sparse vectors.
+
+            :return: sparse vector of their difference
+            """
+            values = defaultdict(float)  # Dictionary with default value 0.0
+            # Add values from v1
+            for i in range(v1.indices.size):
+                values[v1.indices[i]] += v1.values[i]
+            # subtract values from v2
+            for i in range(v2.indices.size):
+                values[v2.indices[i]] -= v2.values[i]
+            return Vectors.sparse(v1.size, dict(values))
+
+        def split_papers(papers_id_list):
+            """
+            Shuffle the input list of paper ids and divide it into two lists. The ratio is 50/50.
+
+            :param: papers_id_list initial list of paper ids that will be split
+            :return: two arrays with paper ids. The first one contains the "positive paper ids" or those
+            which difference will be added with label 1. The second - "the negative paper ids" -  added with
+            label 0.
+            """
+            shuffle(papers_id_list)
+            ratio = int(0.5 * len(papers_id_list))
+            positive_class_set = papers_id_list[:ratio]
+            negative_class_set = papers_id_list[ratio:]
+            return [positive_class_set, negative_class_set]
+
+        vector_diff_udf = F.udf(diff, VectorUDT())
+        split_papers_udf = F.udf(split_papers, ArrayType(ArrayType(StringType())))
+
+        if(self.pairs_generation == "edp"): #self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
             # 50 % of the paper_pairs with label 1, 50% with label 0
 
             # get a list of peer paper ids per paper
             peers_per_paper = dataset.groupBy(self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
 
             # generate 50/50 distribution to positive/negative class
-            peers_per_paper = peers_per_paper.withColumn("equally_distributed_papers", UDFContainer.getInstance().split_papers_udf("peers_per_paper"))
+            peers_per_paper = peers_per_paper.withColumn("equally_distributed_papers", split_papers_udf("peers_per_paper"))
 
             # positive label 1
             positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
@@ -163,7 +223,7 @@ class PapersPairBuilder(Transformer):
             positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(
+            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(
                                                             self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
@@ -173,30 +233,27 @@ class PapersPairBuilder(Transformer):
             negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(self.peer_paperId_col))
             negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
             # add the difference (peer_paper_vector - paper_vector) with label 0
-            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, UDFContainer.getInstance().vector_diff_udf(self.peer_paper_vector_col,
+            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col,
                                                             self.paper_vector_col))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
             dataset = positive_class_dataset.union(negative_class_dataset)
-        elif(self.pairs_generation == self.Pairs_Generation.DUPLICATED_PAIRS):
+        elif(self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            positive_class_dataset = dataset.withColumn(self.output_col,
-                                         UDFContainer.getInstance().vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            positive_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
 
             # add the difference (peer_paper_vector - paper_vector) with label 0
-            negative_class_dataset = dataset.withColumn(self.output_col,
-                                                        UDFContainer.getInstance().vector_diff_udf(self.peer_paper_vector_col,
+            negative_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col,
                                                                         self.paper_vector_col))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
 
             dataset = positive_class_dataset.union(negative_class_dataset)
-        elif(self.pairs_generation == self.Pairs_Generation.ONE_CLASS_PAIRS):
+        elif(self.pairs_generation == "ocp"):#self.Pairs_Generation.ONE_CLASS_PAIRS):
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            dataset = dataset.withColumn(self.output_col,
-                                         UDFContainer.getInstance().vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             dataset = dataset.withColumn(self.label_col, F.lit(1))
         else:
@@ -236,23 +293,24 @@ class LearningToRank(Estimator, Transformer):
     
     """
 
-    class Model_Training(Enum):
-        """
-        Enum that contains different training approaches for LTR.
-        """
+    # class Model_Training(Enum):
+    #     """
+    #     Enum that contains different training approaches for LTR.
+    #     """
+    #
+    #     """ Train one model per user. Number of models is equal to number of users.
+    #     Each model will be trained only over papers that are liked by particular user. """
+    #     MODEL_PER_USER = 0
+    #
+    #     """
+    #     Train only one model based on all users. The model won't be so personalized, we will have more
+    #     general model. But the cost of training is less compared to MODEL_PER_USER.
+    #     """
+    #     SINGLE_MODEL_ALL_USERS = 1
+    # Model_Training.SINGLE_MODEL_ALL_USERS
+    # PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS
 
-        """ Train one model per user. Number of models is equal to number of users.
-        Each model will be trained only over papers that are liked by particular user. """
-        MODEL_PER_USER = 0
-
-        """
-        Train only one model based on all users. The model won't be so personalized, we will have more
-        general model. But the cost of training is less compared to MODEL_PER_USER.
-        """
-        SINGLE_MODEL_ALL_USERS = 1
-
-
-    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training= Model_Training.SINGLE_MODEL_ALL_USERS,  pairs_generation = PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, peer_papers_count=10,
+    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training= "sm" ,  pairs_generation = "edp", peer_papers_count=10,
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.
@@ -311,7 +369,7 @@ class LearningToRank(Estimator, Transformer):
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
         # train multiple models, one for each user in the data set
-        if(self.model_training == self.Model_Training.MODEL_PER_USER):
+        if(self.model_training == "mpu"): #self.Model_Training.MODEL_PER_USER):
             # extract all distinct users
             distinct_user_ids = dataset.select(self.userId_col).distinct().collect()
 
@@ -325,7 +383,8 @@ class LearningToRank(Estimator, Transformer):
                 # add the model for the user
                 self.models[userId] = user_lsvcModel
             return self.models
-        elif(self.model_training == self.Model_Training.SINGLE_MODEL_ALL_USERS):
+        elif(self.model_training == "sm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+            print("One model")
             # Fit the model over full dataset and produce only one model for all users
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
@@ -356,6 +415,7 @@ class LearningToRank(Estimator, Transformer):
         self.paper_profiles_model.setPaperIdCol("peer_paper_id")
         self.paper_profiles_model.setOutputCol("peer_paper_tf_idf_vector")
         dataset = self.paper_profiles_model.transform(dataset)
+
         # 2) pair building
         # peer_paper_tf_idf_vector, paper_tf_idf_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
@@ -365,8 +425,9 @@ class LearningToRank(Estimator, Transformer):
                                               output_col=self.features_col, label_col="label")
 
         dataset = papersPairBuilder.transform(dataset)
-        lsvc = LinearSVC(maxIter=10, regParam=0.1, featuresCol=self.features_col,
+        lsvc = TestLinearSVC(maxIter=10, regParam=0.1, featuresCol=self.features_col,
                          labelCol="label")
+
         # Fit the model
         lsvcModel = lsvc.fit(dataset)
 
@@ -384,7 +445,7 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper profiles
         :return: dataset with predictions - column "prediction"
         """
-        if(self.model_training == self.Model_Training.MODEL_PER_USER):
+        if(self.model_training == "mpu"): #self.Model_Training.MODEL_PER_USER):
             papers_corpus_predictions = None
 
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
@@ -406,7 +467,8 @@ class LearningToRank(Estimator, Transformer):
                 else:
                     papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
 
-        elif (self.model_training == self.Model_Training.SINGLE_MODEL_ALL_USERS):
+        elif (self.model_training == "sm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+            print("Transofrming....")
             model = self.models[0]
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
             self.paper_profiles_model.setOutputCol(self.features_col)

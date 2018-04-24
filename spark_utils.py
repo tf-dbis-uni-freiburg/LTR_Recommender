@@ -20,7 +20,7 @@ class UDFContainer():
         self.vector_diff = F.udf(UDFContainer.__diff, VectorUDT())
         self.to_tf_vector = F.udf(UDFContainer.__to_tf_vector, VectorUDT())
         self.to_tf_idf_vector = F.udf(UDFContainer.__to_tf_idf_vector, VectorUDT())
-        self.generate_peers = F.udf(UDFContainer.__generate_peers, ArrayType(IntegerType(), False))
+        self.generate_peers = F.udf(UDFContainer.__generate_peers, ArrayType(IntegerType()))
         self.split_papers = F.udf(UDFContainer.__split_papers, ArrayType(ArrayType(StringType())))
         self.mrr_per_user = F.udf(UDFContainer.__mrr_per_user, DoubleType())
         self.ndcg_per_user = F.udf(UDFContainer.__ndcg_per_user, DoubleType())

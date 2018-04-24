@@ -1,9 +1,12 @@
-from dateutil.relativedelta import relativedelta
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
+import time
+#from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
+import datetime
+import scipy
 
 class Fold:
     """
@@ -25,11 +28,13 @@ class Fold:
     """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.csv"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
-    DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-folds/fold-"
+    DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
     """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "folds/fold-"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
     LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
+
+    PREDICTION_DF_FILENAME = "prediction.parquet"
 
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
@@ -158,6 +163,23 @@ class Fold:
         else:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
 
+    @staticmethod
+    def get_prediction_data_frame_path(fold_index, model_training, distributed=True):
+        """
+        Get the path to the file/folder where test data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        # return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.
+        if (distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + str(model_training) + "-" + Fold.PREDICTION_DF_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + str(model_training) + Fold.PREDICTION_DF_FILENAME
+
 class FoldSplitter:
     """
     Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
@@ -199,7 +221,8 @@ class FoldSplitter:
         folds = []
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
-        fold_end_date = start_date + relativedelta(months=2 * period_in_months)
+        # TODO REVERT
+        fold_end_date = start_date # + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
             fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
@@ -211,7 +234,8 @@ class FoldSplitter:
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
-            fold_end_date = fold_end_date + relativedelta(months=period_in_months)
+            # TODO REVERT
+            fold_end_date = fold_end_date # + relativedelta(months=period_in_months)
             fold_index += 1
         return folds
 
@@ -232,7 +256,8 @@ class FoldSplitter:
         """
 
         # select only those rows which timestamp is between end_date and (end_date - period_in_months)
-        test_set_start_date = end_date + relativedelta(months=-period_in_months)
+        # TODO REVERT
+        test_set_start_date = end_date # + relativedelta(months=-period_in_months)
 
         # remove all rows outside the period [test_start_date, test_end_date]
         test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
@@ -293,8 +318,10 @@ class FoldValidator():
     """ Total number of folds. """
     NUMBER_OF_FOLD = 23;
 
-    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation=PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
+    # PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS
+    # LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS
+    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "sm"):
         """
         Construct FoldValidator object.
         
@@ -440,9 +467,11 @@ class FoldValidator():
             # loading the fold
             loadingTheFold = datetime.datetime.now()
             fold = self.load_fold(spark, i)
-            # fold.papers_corpus.papers = fold.papers_corpus.papers.limit(100)
-            # fold.training_data_frame = fold.training_data_frame.limit(500)
-            # fold.test_data_frame = fold.test_data_frame.limit(500)
+
+            # drop unneeded columns TODO remove this somewhere else
+            fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
+            # drop unneeded columns TODO remove this somewhere else
+            fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
 
             lf = datetime.datetime.now() - loadingTheFold
             file = open("execution.txt", "a")
@@ -464,41 +493,47 @@ class FoldValidator():
             ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
-            ltr.fit(fold.training_data_frame)
 
+            ltr.fit(fold.training_data_frame)
             lrt = datetime.datetime.now() - ltrTraining
             file = open("execution.txt", "a")
-            file.write("Training LTR, type " + str(self.model_training) + " Time: "+ str(lrt) + "\n")
+            file.write("Training LTR, type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
             file.close()
 
-            # predictiong by LTR
+            # prediction by LTR
             ltrPrediction = datetime.datetime.now()
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
-
             ltrPr = datetime.datetime.now() - ltrPrediction
             file = open("execution.txt", "a")
             file.write("Prediction LTR:" + str(ltrPr) + "\n")
             file.close()
 
-            # TODO only for testing
-            # papers_corpus_with_predictions.write.save("predictions-fold-2.csv")
-            # papers_corpus_with_predictions = spark.read.load("predictions.parquet")
+            papers_corpus_with_predictions.show()
 
-            # Evaluation LTR
-            eval = datetime.datetime.now()
-            # # EVALUATION
-            # # TODO uncomment this when using learning_to_rank with DF
-            # # extract the raw score for each row
-            # # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
-            # # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
-            # # print(papers_corpus_with_predictions.take(2))
+            # # # # TODO only for testing
+            # # # papers_corpus_with_predictions.write.save(Fold.get_prediction_data_frame_path(fold.index, self.model_training))
             #
-            FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-                .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
-            evalTime = datetime.datetime.now() - eval
-            file = open("execution.txt", "a")
-            file.write("Evaluation:" + str(evalTime) + "\n")
-            file.close()
+            # Evaluation LTR
+            # eval = datetime.datetime.now()
+            # EVALUATION
+            #
+            # # extract the raw score for each row
+            # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
+            # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
+            # #
+            # FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
+            #     .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+            # evalTime = datetime.datetime.now() - eval
+            # file = open("execution.txt", "a")
+            # file.write("Evaluation:" + str(evalTime) + "\n")
+            # file.close()
+            #
+            # tfidfModel.paper_profiles.unpersist()
+            # fold.test_data_frame.unpersist()
+            # fold.training_data_frame.unpersist()
+            # fold.papers_corpus.papers.unpersist()
+            #
+            # time.sleep(20)
 
 class FoldEvaluator:
     """ 
@@ -508,7 +543,7 @@ class FoldEvaluator:
     """ Name of the file in which results for a fold are written. """
     RESULTS_CSV_FILENAME = "evaluation-results.txt"
 
-    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
+    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "sm"): #LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
@@ -544,13 +579,115 @@ class FoldEvaluator:
         Format (user_id, mrr, recall, ndcg)
         """
 
+        def get_candidate_set_per_user(total_predicted_papers, training_paper, k):
+            """
+            From a list of best predicted papers(k + max. number of papers for a user in the training set),
+            remove those which a user already liked and they are included in the training set.
+
+            :param total_predicted_papers list of tuples. Each contains (paper_id, prediction). Not sorted.
+            Represents top predicted papers
+            :param training_paper: all paper ids that are part of liked papers by a used in the training set
+            :param k: how many top predictions have to be returned
+            :return: top k predicted papers for a user
+            """
+            # sort by prediction
+            sorted_prediction_papers = sorted(total_predicted_papers, key=lambda tup: -tup[1])
+            training_paper_set = set(training_paper)
+            filtered_sorted_prediction_papers = [(float(x), float(y)) for x, y in sorted_prediction_papers if
+                                                 x not in training_paper_set]
+            return filtered_sorted_prediction_papers[:k]
+
+        def mrr_per_user(predicted_papers, test_papers, k):
+            """
+            Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order) and select top k.
+            Find the first hit in the predicted papers and return 1/(index of the first hit). For
+            example, if a test_paper is [7, 12, 19, 66, 10]. And sorted predicted_papers is 
+            [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)]. The first hit 
+            is 7 which index is 3. Then the mrr is 1 / (3+1)
+
+            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
+            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+            :param k top # papers needed to be selected
+            :return: mrr 
+            """
+            # sort by prediction
+            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+            # take first k
+            sorted_prediction_papers = sorted_prediction_papers[:k]
+            test_papers_set = set(test_papers)
+            index = 1
+            for i, prediction in sorted_prediction_papers:
+                if (int(i) in test_papers_set):
+                    return 1 / index
+                index += 1
+            return 0.0
+
+        def recall_per_user(predicted_papers, test_papers, k):
+            """
+            Calculate Recall for a specific user. Select only the top k paper ids sorted DESC by prediction score.
+            Extract only paper ids from predicted_papers, discard prediction information.
+            Then, find the number of hits (common paper ids) that both arrays have. Return (#hits)/ (size of test_papers). 
+            For example, if a test_paper is [7, 12, 19, 66, 10]. And predicted_papers is  [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)].
+            Hits are [7, 12, 10, 66]. Then the result value is (4 / 5) = 0.8
+
+            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
+            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+            :param k top # papers needed to be selected
+            :return: recall
+            """
+            # sort by prediction
+            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+            # take first k
+            sorted_prediction_papers = sorted_prediction_papers[:k]
+            predicted_papers = [int(x[0]) for x in sorted_prediction_papers]
+            hits = set(predicted_papers).intersection(test_papers)
+            return len(hits) / len(test_papers)
+
+        def ndcg_per_user(predicted_papers, test_papers, k):
+            """
+            Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
+            Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
+            ((prediction) / log(2, position of the paper in the list + 1)). Prediction of a paper is either 0 or 1. If a predicted
+            paper is part of the test set, its prediction is 1; otherwise its prediction is 0. Finally ,divide by normalization factor 
+            - IDCG calculated over top k predicted papers. IDCG is calculated the same way as DCG, but the only difference is that each 
+            paper from top k has prediction/relevance 1.
+            For example, if sorted top 5 predicted_papers are [(3, 5.5), (7, 4.5) , (5, 4.3), (6, 4.1), (4, 3.0)] and a test set 
+            is [(2, 6.4), (5, 4.5), (3, 1.2)]. DCG will be (1 / log2(2)) + (1 / log2(5)), hits are only paper 3 and paper 5.
+            IDCG will be (1 / log2(2)) + (1 / log2(3)) + (1 / log2(4)) + (1 / log2(5)) + (1 / log2(6)))
+
+            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
+            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
+            :param k top # papers needed to be selected
+            :return: NDCG for a user
+            """
+            # sort by prediction
+            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
+            test_papers_set = set(test_papers)
+            position = 1
+            dcg = 0;
+            idcg = 0
+            for paper_id, prediction in sorted_prediction_papers:
+                # if there is a hit
+                if (int(paper_id) in test_papers_set):
+                    dcg += 1 / (math.log((position + 1), 2))
+
+                idcg += 1 / (math.log((position + 1), 2))
+                position += 1
+            return dcg / idcg
+
+        mrr_per_user_udf = F.udf(mrr_per_user, DoubleType())
+        ndcg_per_user_udf = F.udf(ndcg_per_user, DoubleType())
+        recall_per_user_udf = F.udf(recall_per_user, DoubleType())
+        get_candidate_set_per_user_udf = F.udf(get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
+
+
         # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
         training_user_library = fold.training_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("training_user_library"))
         training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
         max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
 
         candidate_papers_per_user = None
-        if(self.model_training == LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
+        if(self.model_training == "sm"): #LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
             # take max top k + max_training_library size
             papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy(score_col, ascending=False).limit(self.max_top_k + max_training_library)
 
@@ -558,7 +695,7 @@ class FoldEvaluator:
 
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
-        elif(self.model_training == LearningToRank.Model_Training.MODEL_PER_USER):
+        elif(self.model_training == "mpu" or self.model_training == "smmu"): #LearningToRank.Model_Training.MODEL_PER_USER): # SINGLE_MODEL_MULTIPLE_USERS
 
             # TODO optimization only users that are part of a test set are needed for evaluation, not all users in the training data set
             window = Window.partitionBy(userId_col).orderBy(F.col(score_col).desc())
@@ -573,7 +710,8 @@ class FoldEvaluator:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
 
-        candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set", UDFContainer.getInstance().get_candidate_set_per_user_udf("predictions", "training_user_library", F.lit(self.max_top_k)))
+
+        candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set", get_candidate_set_per_user_udf("predictions", "training_user_library", F.lit(self.max_top_k)))
         candidate_papers_per_user = candidate_papers_per_user.select(userId_col, "candidate_papers_set")
 
         # add test user library to each user
@@ -585,22 +723,22 @@ class FoldEvaluator:
         for k in self.k_mrr:
             column_name = "mrr@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, UDFContainer.getInstance().mrr_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, mrr_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
 
         # add recall
         for k in self.k_recall:
             column_name = "recall@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, UDFContainer.getInstance().recall_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, recall_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
         # add ndcg
         for k in self.k_ndcg:
             column_name = "NDCG@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, UDFContainer.getInstance().ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
 
         evaluation_per_user = evaluation_per_user.drop("candidate_papers_set", "test_user_library")
         # store results per fold
-        self.store_fold_results(fold.index, evaluation_per_user, distributed=False)
+        self.store_fold_results(fold.index, evaluation_per_user)
         # store overall results
         evaluations = {}
         # compute avg over all columns
@@ -639,6 +777,21 @@ class FoldEvaluator:
             line = line + "| " + str(metric_value)
         file.write(line)
         file.close()
+
+    def calculate_prediction(features, coefficients):
+        """
+        Calculate a score prediction for a paper. Multiple its features vector
+        with the coefficients received from the model.
+
+        :param features: sparse vector, features vector of a paper
+        :param coefficients: model coefficient, weights for each feature
+        :return: prediction score 
+        """
+        cx = scipy.sparse.coo_matrix(features)
+        prediction = 0.0
+        for index, value in zip(cx.col, cx.data):
+            prediction += value * coefficients[index]
+        return float(prediction)
 
 class FoldStatisticsWriter:
     """
