@@ -33,6 +33,12 @@ wheels/
 *.manifest
 *.spec
 
+# Data
+/python/folds/*
+/python/local-distributed-fold-*
+/python/distributed-fold-*
+/python/reduced-data/*
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
