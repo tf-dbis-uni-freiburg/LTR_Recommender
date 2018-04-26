@@ -4,6 +4,7 @@ from pyspark.ml.linalg import Vectors
 from pyspark.ml.linalg import VectorUDT
 import math
 import pyspark.sql.functions as F
+from pyspark.ml.clustering import LDA
 from pyspark.sql.types import StructType, StructField, IntegerType
 
 
@@ -55,13 +56,11 @@ class TFVectorizer(Estimator):
 
         # select only those papers that are part of the paper corpus
         papers = papers.join(self.papers_corpus.papers, papers[self.paperId_col] == self.papers_corpus.papers[self.papers_corpus.paperId_col]).drop(papers[self.paperId_col])
-
         # explode map with key:value pairs
-        # term_occurence
-        exploded_papers = papers.select(self.paperId_col, F.explode(self.tf_map_col))
-
+        # term_occurrence
+        exploded_papers = papers.select(self.paperId_col, F.explode(self.tf_map_col)).withColumnRenamed("key", "term_id")
         # collect all distinct term ids
-        terms = exploded_papers.select("key").distinct().withColumnRenamed("key", "term_id")
+        terms = exploded_papers.select("term_id").distinct()
 
         # generate sequential ids for terms, use zipWithIndex to generate ids starting from 0
         # (name, dataType, nullable)
@@ -73,29 +72,30 @@ class TFVectorizer(Estimator):
         # join term corpus with exploded papers to add new id for each term
         # format (key, paper_id, value, id)
         indexed_exploded_papers = exploded_papers.join(term_corpus, "term_id")
+
         # collect (id, value) pairs into one list
         indexed_exploded_papers = indexed_exploded_papers.groupby(self.paperId_col).agg(F.collect_list(F.struct("id", "value")).alias("term_occurrence"))
         voc_size = terms.count()
 
-        to_tf_vector_udf = F.udf(self.to_tf_vector, VectorUDT())
-        dataset = indexed_exploded_papers.withColumn(self.output_col, to_tf_vector_udf("term_occurrence", F.lit(voc_size)))
+        def to_tf_vector(terms_mapping, voc_size):
+            """
+            From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
+            The first is the term id. The second is the number of occurences, the term appears in a paper.
 
+            :param terms_mapping: a list of lists. Each sublist contains two elements.
+            :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
+            :return: sparse vector based on the input mapping. It is a tf representation of a paper
+            """
+            map = {}
+            for term_id, term_occurrence in terms_mapping:
+                map[term_id] = term_occurrence
+            return Vectors.sparse(voc_size, map)
+
+
+        to_tf_vector_udf = F.udf(to_tf_vector, VectorUDT())
+        dataset = indexed_exploded_papers.withColumn(self.output_col, to_tf_vector_udf("term_occurrence", F.lit(voc_size)))
         paper_profiles = dataset.select(self.paperId_col, self.output_col)
         return TFVectorizorModel(paper_profiles, self.paperId_col, self.output_col);
-
-    def to_tf_vector(terms_mapping, voc_size):
-        """
-        From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
-        The first is the term id. The second is the number of occurences, the term appears in a paper.
-
-        :param terms_mapping: a list of lists. Each sublist contains two elements.
-        :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
-        :return: sparse vector based on the input mapping. It is a tf representation of a paper
-        """
-        map = {}
-        for term_id, term_occurrence in terms_mapping:
-            map[term_id] = term_occurrence
-        return Vectors.sparse(voc_size, map)
 
 class TFVectorizorModel(Transformer):
     """
@@ -288,26 +288,28 @@ class TFIDFVectorizorModel(Transformer):
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
 
-
 class LDAVectorizer(Estimator):
 
 
-
-    def __init__(self, papers_corpus, paperId_col="paper_id", tf_map_col="term_occurrence", output_col="lda_vector"):
+    def __init__(self, papers_corpus, k_topics = 5, maxIter = 10, paperId_col = "paper_id", tf_map_col = "term_occurrence", output_col = "lda_vector"):
         """
         Create an instance of the class.
     
         :param papers_corpus: PaperCorpus object that contains data frame. It represents all papers from the corpus. 
         Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information.
+        :param k_topics the number of topics (clusters) to infer. Must be > 1
+        :param maxIter max number of iterations (>= 0)
         :param paperId_col name of the paper id column in the input data frame of fit()
         :param tf_map_col name of the tf representation column in the input data frame of fit(). The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
-        :param output_col the name of the column in which the produced result is stored - tf vector of a paper
+        :param output_col the name of the column in which the produced result is stored - lda vector of a paper
         """
         self.papers_corpus = papers_corpus
         # data frame contains all the terms in the corpus and their corresponding ids
         self.term_corpus = None
+        self.k_topics = k_topics
+        self.maxIter = maxIter
         self.paperId_col = paperId_col
         self.tf_map_col = tf_map_col
         self.output_col = output_col
@@ -327,72 +329,38 @@ class LDAVectorizer(Estimator):
 
     def _fit(self, papers):
         """
-        Build a tf representation for each paper in the input data set. Based on papers in the papers corpus, a set of all
+        Build a LDA representation for each paper in the input data set. Based on papers in the papers corpus, a set of all
         terms is extracted. For each of them a unique id is generated. Term ids are sequential. Then depending on all terms
         and their frequence for a paper, a sparse vector is built. A model that can be used to map a tf vector to each paper 
-        based on its paper id is returned.
+        based on its paper id is used. Based on the tf representation of all papers - LDA is trained and used for prodicing
+        LDA representation.
     
-        :param dataset: input dataset, which is an instance of :py:class:`pyspark.sql.DataFrame`
+        :param data set: input data set, which is an instance of :py:class:`pyspark.sql.DataFrame`
         :returns: a build model which can be used for transformation of a data set
         """
 
-        # select only those papers that are part of the paper corpus
-        papers = papers.join(self.papers_corpus.papers,
-                             papers[self.paperId_col] == self.papers_corpus.papers[self.papers_corpus.paperId_col]).drop(
-            papers[self.paperId_col])
+        tfVectorizer = TFVectorizer(self.papers_corpus, paperId_col = self.paperId_col, tf_map_col = self.tf_map_col, output_col = "tf_vector")
+        tfVectorizerModel = tfVectorizer.fit(dataset = papers)
+        # paper_id | tf_vector
+        papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
 
-        # explode map with key:value pairs
-        # term_occurence
-        exploded_papers = papers.select(self.paperId_col, F.explode(self.tf_map_col))
+        # Trains a LDA model.
+        # The number of topics(clusters) to infer. Must be > 1.
+        lda = LDA(featuresCol = "tf_vector", k = self.k_topics, maxIter = self.maxIter)
+        model = lda.fit(papers_tf_vectors)
 
-        # collect all distinct term ids
-        terms = exploded_papers.select("key").distinct().withColumnRenamed("key", "term_id")
-
-        # generate sequential ids for terms, use zipWithIndex to generate ids starting from 0
-        # (name, dataType, nullable)
-        term_corpus_schema = StructType([StructField("term_id", IntegerType(), False),
-                                         StructField("id", IntegerType(), False)])
-        term_corpus = terms.rdd.zipWithIndex().map(lambda x: (int(x[0][0]), x[1])).toDF(term_corpus_schema)
-        self.term_corpus = term_corpus
-
-        # join term corpus with exploded papers to add new id for each term
-        # format (key, paper_id, value, id)
-        indexed_exploded_papers = exploded_papers.join(term_corpus, "term_id")
-        # collect (id, value) pairs into one list
-        indexed_exploded_papers = indexed_exploded_papers.groupby(self.paperId_col).agg(
-            F.collect_list(F.struct("id", "value")).alias("term_occurrence"))
-        voc_size = terms.count()
-
-        to_tf_vector_udf = F.udf(self.to_tf_vector, VectorUDT())
-        dataset = indexed_exploded_papers.withColumn(self.output_col, to_tf_vector_udf("term_occurrence", F.lit(voc_size)))
-
-        paper_profiles = dataset.select(self.paperId_col, self.output_col)
-        return TFVectorizorModel(paper_profiles, self.paperId_col, self.output_col);
-
-
-    def to_tf_vector(terms_mapping, voc_size):
-        """
-        From a list of lists ([[], [], [], ...]) create a sparse vector. Each sublist contains 2 values.
-        The first is the term id. The second is the number of occurences, the term appears in a paper.
-    
-        :param terms_mapping: a list of lists. Each sublist contains two elements.
-        :param voc_size: the size of returned Sparse vector, total number of terms in the paper corpus
-        :return: sparse vector based on the input mapping. It is a tf representation of a paper
-        """
-        map = {}
-        for term_id, term_occurrence in terms_mapping:
-            map[term_id] = term_occurrence
-        return Vectors.sparse(voc_size, map)
-
+        # paper_id | lda_vector
+        papers_lda_vectors = model.transform(papers_tf_vectors).withColumnRenamed("topicDistribution", self.output_col).drop("tf_vector")
+        return LDAModel(papers_lda_vectors, self.paperId_col, self.output_col);
 
 class LDAModel(Transformer):
     """
-    Class that add a tf vector representation to each paper based on @paperId_col
+    Class that add a LDA vector representation to each paper based on @paperId_col
     """
 
-    def __init__(self, paper_profiles, paperId_col="paper_id", output_col="tf_vector"):
+    def __init__(self, paper_profiles, paperId_col = "paper_id", output_col = "lda_vector"):
         """
-        Build a tf-vectorizer model. It adds a tf-vector representation to each paper based on its paper id.
+        Build a LDA-vectorizer model. It adds a lda-vector representation to each paper based on its paper id.
         It is stored in paperId_col. The result the model produces is stored in output_col.
 
         :param paper_profiles: a data frame that contains a tf profile of each paper
@@ -404,7 +372,7 @@ class LDAModel(Transformer):
         self.paperId_col = paperId_col
         self.output_col = output_col
 
-    def setOutputTfCol(self, output_col):
+    def setOutputCol(self, output_col):
         """
         Change the name of the column in which the result of the transform operation is stored. 
 
@@ -415,7 +383,7 @@ class LDAModel(Transformer):
 
     def setPaperIdCol(self, paperId_col):
         """
-        Change the name of the column in which a paper id is stored. Based on it a tf representation
+        Change the name of the column in which a paper id is stored. Based on it a lda representation
         to each paper id added.
 
         :param paperId_col: new name of the paper id column in the input data set of transform()
@@ -425,9 +393,9 @@ class LDAModel(Transformer):
 
     def _transform(self, dataset):
         """
-        Add for each paper, its corresponding tf vector.
+        Add for each paper, its corresponding LDA vector.
 
-        :param dataset: input data with a column paperId_col. Based on it, a tf vector for each paper is added.
+        :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
         dataset = dataset.join(self.paper_profiles, self.paperId_col);

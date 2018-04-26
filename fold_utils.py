@@ -460,7 +460,7 @@ class FoldValidator():
         # total number of fold  - 23
         for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
-            file = open("execution.txt", "a")
+            file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
             file.close()
 
@@ -469,34 +469,42 @@ class FoldValidator():
             fold = self.load_fold(spark, i)
 
             # drop unneeded columns TODO remove this somewhere else
+            # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
+
             # drop unneeded columns TODO remove this somewhere else
+            # citeulike_paper_id | user_id | paper_id|
             fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
 
             lf = datetime.datetime.now() - loadingTheFold
-            file = open("execution.txt", "a")
+            file = open("results/execution.txt", "a")
             file.write("Loading the fold " + str(lf) + "\n")
             file.close()
 
             # training TF IDF
             trainingTFIDF = datetime.datetime.now()
-            # train a tf idf model using term_occurrences of each paper and paper corpus
-            tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-                                              tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            # # # train a tf idf model using term_occurrences of each paper and paper corpus
+            # # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
+            # #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
+            # # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
+            #
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=10, maxIter=10, paperId_col=self.paperId_col,
+                                              tf_map_col=self.tf_map_col, output_col="lda_vector")
+
             tTFIDF = datetime.datetime.now() - trainingTFIDF
-            file = open("execution.txt", "a")
+            ldaModel = ldaVectorizer.fit(self.bag_of_words)
+            file = open("results/execution.txt", "a")
             file.write("Training TD IDF " + str(tTFIDF) + "\n")
             file.close()
 
             # Training LTR
             ltrTraining = datetime.datetime.now()
-            ltr = LearningToRank(spark, fold.papers_corpus, tfidfModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+            ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
 
             ltr.fit(fold.training_data_frame)
             lrt = datetime.datetime.now() - ltrTraining
-            file = open("execution.txt", "a")
+            file = open("results/execution.txt", "a")
             file.write("Training LTR, type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
             file.close()
 
@@ -504,14 +512,14 @@ class FoldValidator():
             ltrPrediction = datetime.datetime.now()
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
             ltrPr = datetime.datetime.now() - ltrPrediction
-            file = open("execution.txt", "a")
+            file = open("results/execution.txt", "a")
             file.write("Prediction LTR:" + str(ltrPr) + "\n")
             file.close()
-
+            # paper_id | citeulike_paper_id | ranking_score
             papers_corpus_with_predictions.show()
 
-            # # # # TODO only for testing
-            # # # papers_corpus_with_predictions.write.save(Fold.get_prediction_data_frame_path(fold.index, self.model_training))
+            # TODO only for testing
+            # papers_corpus_with_predictions.write.save(Fold.get_prediction_data_frame_path(fold.index, self.model_training))
             #
             # Evaluation LTR
             # eval = datetime.datetime.now()
@@ -551,7 +559,7 @@ class FoldEvaluator:
         self.max_top_k =  max((k_mrr + k_ndcg + k_recall))
 
         # write a file for all folds, it contains a row per fold
-        file = open(self.RESULTS_CSV_FILENAME, "a")
+        file = open( "results/"+ self.RESULTS_CSV_FILENAME, "a")
         header_line = "fold_index |"
         for k in k_mrr:
             header_line = header_line + " MRR@" + str(k) + " |"
@@ -770,7 +778,7 @@ class FoldEvaluator:
         :return: 
         """
         # write a file for each fold, it contains a row per user
-        file = open(self.RESULTS_CSV_FILENAME, "a")
+        file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
         for metric_name, metric_value in overall_evaluation.items():
@@ -805,7 +813,7 @@ class FoldStatisticsWriter:
         :param filename: the name of the file in which the collected statistics will be written
         """
         self.filename = filename
-        file = open(filename, "a")
+        file = open("results/" + filename, "a")
         # write the header in the file
         file.write(
             "fold_index | fold_time | #UTot | #UTR | #UTS | #dU | #ITot | #ITR | #ITS | #nI |"

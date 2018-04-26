@@ -17,7 +17,7 @@ parser.add_argument('-peers_count', type=int, default=10,
                     help='number of peer papers generated for a paper')
 parser.add_argument('-pairs_generation', type=str, default="edp",
                     help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
-parser.add_argument('-model_training', type=str, default="smmu",
+parser.add_argument('-model_training', type=str, default="sm",
                     help='Different training approaches for LTR. Possible options 1) model per user - mpu 2) single model for all users - sm 3) one model that contains different weight vectors for each user - smmu')
 args = parser.parse_args()
 
@@ -75,5 +75,6 @@ fold_validator = FoldValidator(bag_of_words, peer_papers_count=args.peers_count,
                                paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                                userId_col="user_id", tf_map_col="term_occurrence",
                                model_training=args.model_training)
+
 # fold_validator.create_folds(history, papers, papers_mapping, "folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=6)
 fold_validator.evaluate_folds(spark)

@@ -1,12 +1,11 @@
 from pyspark.ml.base import Estimator
 from pyspark.mllib.classification import SVMWithSGD
 from pyspark.mllib.regression import LabeledPoint
-
+import numpy
 from pyspark.mllib.util import MLUtils
 import pyspark.sql.functions as F
 from random import randint
 from pyspark.ml.base import Transformer
-from collections import defaultdict
 from random import shuffle
 from LTR_SVM_spark2 import UserLabeledPoint
 from pyspark.mllib.linalg import VectorUDT
@@ -134,7 +133,8 @@ class PapersPairBuilder(Transformer):
 
     # class Pairs_Generation(Enum):
     #     """
-    #     Enum that contains different approaches for generating pairs. There are three possible values: duplicated_pairs, one_class_pairs,
+    #     Enum that contains different approaches for generating pairs.
+    #     There are three possible values: duplicated_pairs, one_class_pairs,
     #     equally_distributed_pairs. For example, if we have a paper p, and a set of peer papers N for the paper p
     #     1) DUPLICATED_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1) and
     #         (p_p - p, class: 0)
@@ -179,18 +179,14 @@ class PapersPairBuilder(Transformer):
 
         def diff(v1, v2):
             """
-            Calculate the difference between two sparse vectors.
+            Calculate the difference between two arrays.
 
-            :return: sparse vector of their difference
+            :return: array of their difference
             """
-            values = defaultdict(float)  # Dictionary with default value 0.0
-            # Add values from v1
-            for i in range(v1.indices.size):
-                values[v1.indices[i]] += v1.values[i]
-            # subtract values from v2
-            for i in range(v2.indices.size):
-                values[v2.indices[i]] -= v2.values[i]
-            return Vectors.sparse(v1.size, dict(values))
+            array1 = numpy.array(v1)
+            array2 = numpy.array(v2)
+            result = numpy.subtract(array1, array2)
+            return Vectors.dense(result)
 
         def split_papers(papers_id_list):
             """
@@ -217,7 +213,6 @@ class PapersPairBuilder(Transformer):
             peers_per_paper = dataset.groupBy(self.paperId_col).agg(
                 F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
 
-            # split_papers_udf = F.udf(split_papers, ArrayType(ArrayType(StringType())))
             # generate 50/50 distribution to positive/negative class
             peers_per_paper = peers_per_paper.withColumn("equally_distributed_papers", split_papers_udf("peers_per_paper"))
 
@@ -230,9 +225,8 @@ class PapersPairBuilder(Transformer):
                                                                            self.peer_paperId_col))
             positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
 
-            # vector_diff_udf = F.udf(diff, VectorUDT())
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf( self.paper_vector_col, self.peer_paper_vector_col))
+            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
 
@@ -274,6 +268,21 @@ class PapersPairBuilder(Transformer):
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
 
         return dataset
+
+        # def diff_tf_idf(v1, v2):
+        #     """
+        #     Calculate the difference between two sparse vectors.
+        #
+        #     :return: sparse vector of their difference
+        #     """
+        #     values = defaultdict(float)  # Dictionary with default value 0.0
+        #     # Add values from v1
+        #     for i in range(v1.indices.size):
+        #         values[v1.indices[i]] += v1.values[i]
+        #     # subtract values from v2
+        #     for i in range(v2.indices.size):
+        #         values[v2.indices[i]] -= v2.values[i]
+        #     return Vectors.sparse(v1.size, dict(values))
 
 class LearningToRank(Estimator, Transformer):
     """
@@ -395,7 +404,7 @@ class LearningToRank(Estimator, Transformer):
                 self.models[userId] = user_lsvcModel
             return self.models
         # Fit the model over full dataset and produce only one model for all users
-        elif (self.model_training == "sm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+        elif (self.model_training == "sm"): # self.Model_Training.SINGLE_MODEL_ALL_USERS):
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
             return self.models
@@ -420,62 +429,62 @@ class LearningToRank(Estimator, Transformer):
         nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
                                 userId_col=self.userId_col,
                                 output_col="peer_paper_id")
+        # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
 
-        # add tf paper representation to each paper based on its paper_id
+        # add lda paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
 
         # get in which columns the result of the transform is stored
-        former_paper_output_column = self.paper_profiles_model.output_col;
-        print(former_paper_output_column)
-        former_papeId_column = self.paper_profiles_model.paperId_col;
-        #
-        # add tf ids paper representation for peer papers
-        self.paper_profiles_model.setPaperIdCol("peer_paper_id")
-        self.paper_profiles_model.setOutputCol("peer_paper_tf_idf_vector")
+        former_paper_output_column = self.paper_profiles_model.output_col
+        former_papeId_column = self.paper_profiles_model.paperId_col
 
+        # add lda ids paper representation for peer papers
+        self.paper_profiles_model.setPaperIdCol("peer_paper_id")
+        self.paper_profiles_model.setOutputCol("peer_paper_lda_vector")
+        # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
         dataset = self.paper_profiles_model.transform(dataset)
 
         # 2) pair building
-        # peer_paper_tf_idf_vector, paper_tf_idf_vector
+        # peer_paper_lda_vector, paper_lda_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
                                               peer_paperId_col="peer_paper_id",
                                               paper_vector_col=former_paper_output_column,
-                                              peer_paper_vector_col="peer_paper_tf_idf_vector",
+                                              peer_paper_vector_col="peer_paper_lda_vector",
                                               output_col=self.features_col, label_col="label")
+        # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
+
         lsvcModel = None
-
         if (self.model_training == "mpu" or self.model_training == "sm"):
-
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
+                # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
                 return LabeledPoint(line[7], line[6])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
-
             # Build the model
             lsvcModel = SVMWithSGD().train(labeled_data_points, iterations=10)
 
         elif (self.model_training == "smmu"):
-            # create Label Points needed for the model
-            def createUserLabelPoint(line):
+            # create User Labeled Points needed for the model
+            def createUserLabeledPoint(line):
+                # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
                 # userId, label, features
                 return UserLabeledPoint(int(line[2]), line[7], line[6])
 
             # convert data points data frame to RDD
-            labeled_data_points = dataset.rdd.map(createUserLabelPoint)
+            labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
 
             # Build the model
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points, iterations=10)
 
-        # # return the default columns of the paper profiles model, the model is ready for the training
-        # # of the next SVM model
+        # return the default columns of the paper profiles model, the model is ready for the training
+        # of the next SVM model
         self.paper_profiles_model.setPaperIdCol(former_papeId_column)
         self.paper_profiles_model.setOutputCol(former_paper_output_column)
-
         return lsvcModel
 
     def _transform(self, papers_corpus):
