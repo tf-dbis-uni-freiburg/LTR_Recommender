@@ -1,0 +1,141 @@
+fold 1
+fold 1
+Loading the fold 0:00:00.306516
+Training TD IDF 0:00:47.889905
+fold 1
+Loading the fold 0:00:00.367306
+Training TD IDF 0:00:58.869656
+fold 1
+Loading the fold 0:00:00.299309
+fold 1
+Loading the fold 0:00:00.269401
+fold 1
+Loading the fold 0:00:00.492805
+fold 1
+Loading the fold 0:00:00.297070
+fold 1
+Loading the fold 0:00:00.324657
+fold 1
+Loading the fold 0:00:00.781327
+fold 1
+Loading the fold 0:00:00.296363
+fold 1
+Loading the fold 0:00:00.324069
+fold 1
+Loading the fold 0:00:00.286032
+fold 1
+Loading the fold 0:00:00.338804
+fold 1
+Loading the fold 0:00:00.295369
+fold 1
+Loading the fold 0:00:00.380352
+fold 1
+Loading the fold 0:00:00.440210
+fold 1
+Loading the fold 0:00:00.516116
+fold 1
+Loading the fold 0:00:00.587494
+fold 1
+Loading the fold 0:00:00.298818
+Training TD IDF 0:00:00.000027
+fold 1
+Loading the fold 0:00:00.296531
+Training TD IDF 0:00:00.000023
+fold 1
+Loading the fold 0:00:00.337565
+fold 1
+Loading the fold 0:00:00.282006
+fold 1
+Loading the fold 0:00:00.547016
+Training TD IDF 0:00:00.000030
+fold 1
+Loading the fold 0:00:00.314881
+Training TD IDF 0:00:00.000032
+fold 1
+Loading the fold 0:00:00.507443
+Training TD IDF 0:00:00.000035
+fold 1
+Loading the fold 0:00:00.277806
+Training TD IDF 0:00:00.000032
+fold 1
+Loading the fold 0:00:00.515260
+Training TD IDF 0:00:00.000034
+fold 1
+Loading the fold 0:00:00.520310
+Training TD IDF 0:00:00.000033
+fold 1
+Loading the fold 0:00:00.370080
+Training TD IDF 0:00:00.000026
+fold 1
+Loading the fold 0:00:00.340199
+Training TD IDF 0:00:00.000028
+fold 1
+Loading the fold 0:00:00.306705
+Training TD IDF 0:00:00.000031
+fold 1
+Loading the fold 0:00:00.316746
+Training TD IDF 0:00:00.000036
+fold 1
+Loading the fold 0:00:00.359328
+Training TD IDF 0:00:00.000053
+fold 1
+Loading the fold 0:00:00.292066
+fold 1
+Loading the fold 0:00:00.273164
+Training TD IDF 0:00:00.000054
+fold 1
+Loading the fold 0:00:00.628882
+Training TD IDF 0:00:00.000032
+fold 1
+Loading the fold 0:00:00.361116
+Training TD IDF 0:00:00.000033
+fold 1
+Loading the fold 0:00:00.362959
+Training TD IDF 0:00:00.000030
+fold 1
+Loading the fold 0:00:00.389152
+Training TD IDF 0:00:00.000036
+Training LTR, type sm Time: 0:03:19.584769
+Prediction LTR:0:00:00.884747
+fold 1
+Loading the fold 0:00:00.405231
+Training TD IDF 0:00:00.000040
+fold 1
+fold 1
+fold 1
+Loading the fold 0:00:00.340721
+Training TD IDF 0:00:00.000038
+fold 1
+Loading the fold 0:00:00.285676
+Training TD IDF 0:00:00.000030
+fold 1
+Loading the fold 0:00:00.313243
+Training TD IDF 0:00:00.000032
+fold 1
+Loading the fold 0:00:00.391487
+Training TD IDF 0:00:00.000037
+fold 1
+Loading the fold 0:00:00.300981
+Training TD IDF 0:00:00.000033
+Training LTR, type sm Time: 0:00:15.718657
+fold 1
+Loading the fold 0:00:00.803337
+fold 1
+Loading the fold 0:00:00.297721
+Training TD IDF 0:00:00.000029
+Training LTR, type sm Time: 0:01:48.881071
+fold 1
+Loading the fold 0:00:00.309566
+Training TD IDF 0:00:00.000027
+Training LTR, type sm Time: 0:03:26.017373
+fold 1
+Loading the fold 0:00:00.277276
+Training TD IDF 0:00:00.000034
+Training LTR, type sm Time: 0:04:33.988591
+Prediction LTR:0:00:00.758567
+fold 1
+Loading the fold 0:00:00.320136
+Training TD IDF 0:00:00.000026
+fold 1
+Loading the fold 0:00:00.544796
+Training TD IDF 0:00:00.000029
