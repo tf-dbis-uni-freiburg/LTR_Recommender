@@ -139,3 +139,5 @@ Training TD IDF 0:00:00.000026
 fold 1
 Loading the fold 0:00:00.544796
 Training TD IDF 0:00:00.000029
+Training LTR, type sm Time: 0:04:53.855218
+Prediction LTR:0:00:00.973226
