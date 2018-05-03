@@ -122,7 +122,7 @@ object LTRSVMWithSGD {
       stepSize: Double,
       regParam: Double,
       miniBatchFraction: Double,
-      initialWeights: Map[Int, Vector]): LTRSVMModel = {
+      initialWeights: collection.mutable.Map[Int, Vector]): LTRSVMModel = {
     new LTRSVMWithSGD(stepSize, numIterations, regParam, miniBatchFraction)
       .run(input, initialWeights)
   }

@@ -164,7 +164,7 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
   /**
    * Generate the initial weights when the user does not supply them
    */
-  protected def generateInitialWeights(input: RDD[UserLabeledPoint]): Map[Int, Vector] = {
+  protected def generateInitialWeights(input: RDD[UserLabeledPoint]): collection.mutable.Map[Int, Vector] = {
     if (numFeatures < 0) {
       numFeatures = input.map(_.features.size).first()
     }
@@ -172,12 +172,14 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
     val mutableInitialWeights = collection.mutable.Map[Int, Vector]()
     val userIds = input.map(x => x.userId)
    
+    if(addIntercept){
+      
+    }
     userIds.distinct().collect().foreach(
       userId => {
         mutableInitialWeights.put(userId, Vectors.zeros(numFeatures))
       })
-    val initialWeights = mutableInitialWeights.toMap
-    initialWeights
+    mutableInitialWeights
   }
 
   /**
@@ -194,7 +196,7 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
    * of UserLabeledPoint entries starting from the initial weights provided.
    *
    */
-  def run(input: RDD[UserLabeledPoint], initialWeights: Map[Int, Vector]): M = {
+  def run(input: RDD[UserLabeledPoint], initialWeights: collection.mutable.Map[Int, Vector]): M = {
     if (numFeatures < 0) {
       numFeatures = input.map(_.features.size).first()
     }
@@ -254,12 +256,11 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
      * from the prior probability distribution of the outcomes; for linear regression,
      * the intercept should be set as the average of response.
      */
-    val initialWeightsWithIntercept = if (addIntercept) {
+    var initialWeightsWithIntercept = if (addIntercept) {
       appendBiasToMap(initialWeights)
     } else {
-      initialWeights
+      initialWeights.toMap
     }
-
     val weightsWithIntercept = optimizer.optimize(data, initialWeightsWithIntercept)
     
     // intercept will be map[int, double] key - userId, value - intercept for this user
@@ -346,7 +347,7 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
     createModel(finalWeights, finalIntercept)
   }
 
-  def appendBiasToMap(map: Map[Int, Vector]): Map[Int, Vector] = {
+  def appendBiasToMap(map: collection.mutable.Map[Int, Vector]): scala.collection.immutable.Map[Int, Vector] = {
     map foreach {
       case (userId, vector) =>
         vector match {
@@ -356,7 +357,7 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
             val outputValues = Array.ofDim[Double](inputLength + 1)
             System.arraycopy(inputValues, 0, outputValues, 0, inputLength)
             outputValues(inputLength) = 1.0
-            map.updated(userId, Vectors.dense(outputValues))
+            map.put(userId, Vectors.dense(outputValues))
           case sv: SparseVector =>
             val inputValues = sv.values
             val inputIndices = sv.indices
@@ -368,11 +369,11 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
             System.arraycopy(inputIndices, 0, outputIndices, 0, inputValuesLength)
             outputValues(inputValuesLength) = 1.0
             outputIndices(inputValuesLength) = dim
-            map.updated(userId, Vectors.sparse(dim + 1, outputIndices, outputValues))
+            map.put(userId, Vectors.sparse(dim + 1, outputIndices, outputValues))
           case _ => throw new IllegalArgumentException(s"Do not support vector type ${vector.getClass}")
         }
     }
-    map
+    map.toMap
   }
 
 }
