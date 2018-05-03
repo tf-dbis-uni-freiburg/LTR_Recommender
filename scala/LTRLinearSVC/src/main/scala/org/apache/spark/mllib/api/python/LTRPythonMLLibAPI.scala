@@ -46,7 +46,6 @@ private[python] class LTRPythonMLLibAPI extends PythonMLLibAPI {
     convergenceTol: Double): JList[Object] = {
     val SVMAlg = new LTRSVMWithSGD()
     SVMAlg.setIntercept(intercept)
-      .setValidateData(validateData)
     SVMAlg.optimizer
       .setNumIterations(numIterations)
       .setRegParam(regParam)
