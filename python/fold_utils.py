@@ -1,8 +1,10 @@
+from scipy.sparse.dia import dia_matrix
+from pyspark.sql import functions as F
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
-import time
+from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
 import scipy
@@ -29,7 +31,7 @@ class Fold:
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
     DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
     """ Prefix of the name of the folder in which the fold is stored. """
-    PREFIX_FOLD_FOLDER_NAME = "folds/fold-"
+    PREFIX_FOLD_FOLDER_NAME = "fold-"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
     LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
 
@@ -95,6 +97,11 @@ class Fold:
         self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
         self.folder_path = Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/"
 
+    def store(self):
+        self.test_data_frame.persist()
+        self.training_data_frame.persist()
+        self.papers_corpus.persist()
+
     @staticmethod
     def get_test_data_frame_path(fold_index, distributed=True):
         """
@@ -147,7 +154,7 @@ class Fold:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
 
     @staticmethod
-    def get_evaluation_results_frame_path(fold_index, distributed=True):
+    def get_evaluation_results_frame_path(fold_index, model_training, distributed=True):
         """
         Get the path to the file/folder where evaluation results for each user were stored. For the identification of a fold
         its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
@@ -158,9 +165,9 @@ class Fold:
         :return: path to the file/folder
         """
         if (distributed):
-            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + Fold.RESULTS_CSV_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.RESULTS_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + Fold.RESULTS_CSV_FILENAME
 
     @staticmethod
     def get_prediction_data_frame_path(fold_index, model_training, distributed=True):
@@ -221,7 +228,7 @@ class FoldSplitter:
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
         # TODO REVERT
-        fold_end_date = start_date # + relativedelta(months=2 * period_in_months)
+        fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
             fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
@@ -233,8 +240,7 @@ class FoldSplitter:
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
-            # TODO REVERT
-            fold_end_date = fold_end_date # + relativedelta(months=period_in_months)
+            fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
         return folds
 
@@ -255,8 +261,7 @@ class FoldSplitter:
         """
 
         # select only those rows which timestamp is between end_date and (end_date - period_in_months)
-        # TODO REVERT
-        test_set_start_date = end_date # + relativedelta(months=-period_in_months)
+        test_set_start_date = end_date + relativedelta(months=-period_in_months)
 
         # remove all rows outside the period [test_start_date, test_end_date]
         test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
@@ -368,7 +373,7 @@ class FoldValidator():
         # store all folds
         FoldsUtils.store_folds(folds)
         # compute statistics for each fold and store it
-        FoldsUtils.write_fold_statistics(statistics_file_name)
+        FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
         """
@@ -457,6 +462,7 @@ class FoldValidator():
         """
         # load folds one by one and evaluate on them
         # total number of fold  - 23
+        print("Evaluate folds...")
         for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
@@ -467,11 +473,13 @@ class FoldValidator():
             loadingTheFold = datetime.datetime.now()
             fold = self.load_fold(spark, i)
 
-            # drop unneeded columns TODO remove this somewhere else
+            fold.training_data_frame.persist()
+            fold.test_data_frame.persist()
+            fold.papers_corpus.papers.persist()
+
             # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
 
-            # drop unneeded columns TODO remove this somewhere else
             # citeulike_paper_id | user_id | paper_id|
             fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
 
@@ -480,67 +488,61 @@ class FoldValidator():
             file.write("Loading the fold " + str(lf) + "\n")
             file.close()
 
+            print("Start training LDA ...")
             # training TF IDF
-            trainingTFIDF = datetime.datetime.now()
-            # # # train a tf idf model using term_occurrences of each paper and paper corpus
-            # # tfidfVectorizer = TFIDFVectorizer(papers_corpus=fold.papers_corpus, paperId_col=self.paperId_col,
-            # #                                   tf_map_col=self.tf_map_col, output_col="paper_tf_idf_vector")
-            # # tfidfModel = tfidfVectorizer.fit(self.bag_of_words)
-            #
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=10, maxIter=10, paperId_col=self.paperId_col,
+            trainingLDA = datetime.datetime.now()
+            #topics only for testing
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=150, maxIter=10, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="lda_vector")
-
-            tTFIDF = datetime.datetime.now() - trainingTFIDF
+            print("LDA trained.")
+            tLDA = datetime.datetime.now() - trainingLDA
+            print("Fitting LDA...")
             ldaModel = ldaVectorizer.fit(self.bag_of_words)
             file = open("results/execution.txt", "a")
-            file.write("Training TD IDF " + str(tTFIDF) + "\n")
+            file.write("Training LDA " + str(tLDA) + "\n")
             file.close()
 
             # Training LTR
             ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
-
+            print("Fitting LTR.... Model:" + str(self.model_training))
             ltr.fit(fold.training_data_frame)
             lrt = datetime.datetime.now() - ltrTraining
             file = open("results/execution.txt", "a")
-            file.write("Training LTR, type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
+            file.write("Training LTR(fit), type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
             file.close()
-
+            print("Making predictions...")
             # prediction by LTR
             ltrPrediction = datetime.datetime.now()
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
+
+            fold.training_data_frame.unpersist()
+            fold.test_data_frame.unpersist()
+            fold.papers_corpus.papers.unpersist()
+
             ltrPr = datetime.datetime.now() - ltrPrediction
             file = open("results/execution.txt", "a")
-            file.write("Prediction LTR:" + str(ltrPr) + "\n")
+            file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
             file.close()
             # paper_id | citeulike_paper_id | ranking_score
-            papers_corpus_with_predictions.show()
+            #papers_corpus_with_predictions.show()
 
-            # TODO only for testing
-            # papers_corpus_with_predictions.write.save(Fold.get_prediction_data_frame_path(fold.index, self.model_training))
-            #
             # Evaluation LTR
-            # eval = datetime.datetime.now()
+            eval = datetime.datetime.now()
             # EVALUATION
-            #
-            # # extract the raw score for each row
+
+            # extract the raw score for each row
             # vector_udf = F.udf(lambda vector: float(vector[1]), DoubleType())
             # papers_corpus_with_predictions = papers_corpus_with_predictions.withColumn("ranking_score", vector_udf("rawPrediction"))
-            # #
-            # FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-            #     .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
-            # evalTime = datetime.datetime.now() - eval
-            # file = open("execution.txt", "a")
-            # file.write("Evaluation:" + str(evalTime) + "\n")
-            # file.close()
-            #
-            # tfidfModel.paper_profiles.unpersist()
-            # fold.test_data_frame.unpersist()
-            # fold.training_data_frame.unpersist()
-            # fold.papers_corpus.papers.unpersist()
-            #
-            # time.sleep(20)
+
+            print("Starting evaluations...")
+            FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
+                .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+            evalTime = datetime.datetime.now() - eval
+            file = open("results/execution.txt", "a")
+            file.write("Evaluation:" + str(evalTime) + "\n")
+            file.close()
 
 class FoldEvaluator:
     """ 
@@ -610,15 +612,18 @@ class FoldEvaluator:
             Find the first hit in the predicted papers and return 1/(index of the first hit). For
             example, if a test_paper is [7, 12, 19, 66, 10]. And sorted predicted_papers is 
             [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)]. The first hit 
-            is 7 which index is 3. Then the mrr is 1 / (3+1)
+            is 7 which index is 3. Then the mrr is 1 / (3 + 1)
 
             :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
             :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
             :param k top # papers needed to be selected
             :return: mrr 
             """
+            # checking - if not test set, no evaluation for this user
+            if (len(test_papers) == 0):
+                return None
             # sort by prediction
-            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
             # take first k
             sorted_prediction_papers = sorted_prediction_papers[:k]
             test_papers_set = set(test_papers)
@@ -642,13 +647,19 @@ class FoldEvaluator:
             :param k top # papers needed to be selected
             :return: recall
             """
+            # checking - if not test set, no evaluation for this user
+            if (len(test_papers) == 0):
+                return None
             # sort by prediction
-            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: - tup[1])
+            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
             # take first k
             sorted_prediction_papers = sorted_prediction_papers[:k]
             predicted_papers = [int(x[0]) for x in sorted_prediction_papers]
             hits = set(predicted_papers).intersection(test_papers)
-            return len(hits) / len(test_papers)
+            if(len(hits) == 0):
+                return 0.0
+            else:
+                return len(hits) / len(test_papers)
 
         def ndcg_per_user(predicted_papers, test_papers, k):
             """
@@ -667,9 +678,13 @@ class FoldEvaluator:
             :param k top # papers needed to be selected
             :return: NDCG for a user
             """
+            if (len(test_papers) == 0):
+                return None
             # sort by prediction
             sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: -tup[1])
             test_papers_set = set(test_papers)
+            # take first k
+            sorted_prediction_papers = sorted_prediction_papers[:k]
             position = 1
             dcg = 0;
             idcg = 0
@@ -695,6 +710,7 @@ class FoldEvaluator:
 
         candidate_papers_per_user = None
         if(self.model_training == "sm"): #LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
+            print("Model training: sm")
             # take max top k + max_training_library size
             papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy(score_col, ascending=False).limit(self.max_top_k + max_training_library)
 
@@ -737,6 +753,7 @@ class FoldEvaluator:
             column_name = "recall@" + str(k)
             evaluation_columns.append(column_name)
             evaluation_per_user = evaluation_per_user.withColumn(column_name, recall_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+
         # add ndcg
         for k in self.k_ndcg:
             column_name = "NDCG@" + str(k)
@@ -744,18 +761,24 @@ class FoldEvaluator:
             evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
 
         evaluation_per_user = evaluation_per_user.drop("candidate_papers_set", "test_user_library")
+        evaluation_per_user.show()
+
+        print("Store evaluation per user.")
         # store results per fold
-        self.store_fold_results(fold.index, evaluation_per_user)
+        self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
+
         # store overall results
         evaluations = {}
+        print("Store overall evaluations...")
         # compute avg over all columns
         for metric_column in evaluation_columns:
-            avg = evaluation_per_user.groupBy().agg(F.avg(metric_column)).collect()
+            # remove NoNe values and then calculate the AVG
+            avg = evaluation_per_user.where(F.col(metric_column).isNotNull()).groupBy().agg(F.avg(metric_column)).collect()
             evaluations[metric_column] = avg[0][0]
         self.append_fold_overall_result(fold.index, evaluations)
         return evaluation_per_user
 
-    def store_fold_results(self, fold_index,  evaluations_per_user, distributed=True):
+    def store_fold_results(self, fold_index, model_training, evaluations_per_user, distributed=True):
         """
         Store evaluation results for a fold.
         
@@ -766,9 +789,9 @@ class FoldEvaluator:
         """
         # save evaluation results
         if(distributed):
-            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index))
+            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, model_training))
         else:
-            evaluations_per_user.coalesce(1).write.csv(Fold.get_evaluation_results_frame_path(fold_index, distributed=False), header=True)
+            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
 
     def append_fold_overall_result(self, fold_index, overall_evaluation):
         """

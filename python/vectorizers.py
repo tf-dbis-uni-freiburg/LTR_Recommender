@@ -338,12 +338,10 @@ class LDAVectorizer(Estimator):
         :param data set: input data set, which is an instance of :py:class:`pyspark.sql.DataFrame`
         :returns: a build model which can be used for transformation of a data set
         """
-
         tfVectorizer = TFVectorizer(self.papers_corpus, paperId_col = self.paperId_col, tf_map_col = self.tf_map_col, output_col = "tf_vector")
         tfVectorizerModel = tfVectorizer.fit(dataset = papers)
         # paper_id | tf_vector
         papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
-
         # Trains a LDA model.
         # The number of topics(clusters) to infer. Must be > 1.
         lda = LDA(featuresCol = "tf_vector", k = self.k_topics, maxIter = self.maxIter)

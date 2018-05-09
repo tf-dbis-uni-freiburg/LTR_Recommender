@@ -1,3 +1,5 @@
+from _ast import In
+
 from pyspark.ml.base import Estimator
 from pyspark.mllib.classification import SVMWithSGD
 from pyspark.mllib.regression import LabeledPoint
@@ -11,7 +13,7 @@ from LTR_SVM_spark2 import UserLabeledPoint
 from pyspark.mllib.linalg import VectorUDT
 from pyspark.mllib.linalg import Vectors
 from LTR_SVM_spark2 import LTRSVMWithSGD
-from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType
+from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row
 
 
 class PeerPapersSampler(Transformer):
@@ -466,7 +468,7 @@ class LearningToRank(Estimator, Transformer):
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
             # Build the model
-            lsvcModel = SVMWithSGD().train(labeled_data_points, iterations=10)
+            lsvcModel = SVMWithSGD().train(labeled_data_points)
 
         elif (self.model_training == "smmu"):
             # create User Labeled Points needed for the model
@@ -479,7 +481,7 @@ class LearningToRank(Estimator, Transformer):
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
 
             # Build the model
-            lsvcModel = LTRSVMWithSGD().train(labeled_data_points, iterations=10)
+            lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
 
         # return the default columns of the paper profiles model, the model is ready for the training
         # of the next SVM model
@@ -541,6 +543,7 @@ class LearningToRank(Estimator, Transformer):
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
 
             # make predictions using the model over full papers corpus
+            # TODO check if this conversion is still needed
             papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
 
             # set threshold to NONE to receive raw predictions from the model
@@ -566,13 +569,16 @@ class LearningToRank(Estimator, Transformer):
             # add paper representation to each paper in the corpus
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
 
-            for userId, weight in self.model.weights:
+            for key in model.modelWeights:
+                keySt = str(key)
                 # TODO optimize by removing papers from the training set
                 # make predictions using the model over full papers corpus
                 papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
 
+                userIdRow = Row(user_id=keySt)
+                key = [userIdRow]
                 # add user id to each row to distinguish which model was used for these predictions
-                user_id_df = self.spark.createDataFrame([(userId)], [self.userId_col])
+                user_id_df = self.spark.createDataFrame(key)
                 user_papers_corpus = papers_corpus.crossJoin(user_id_df)
 
                 # set threshold to NONE to receive raw predictions from the model
@@ -596,7 +602,7 @@ class LearningToRank(Estimator, Transformer):
                     papers_corpus_predictions = user_papers_corpus_predictions
                 else:
                     papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
-
+            user_papers_corpus_predictions.show()
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')

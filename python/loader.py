@@ -173,10 +173,11 @@ class Loader:
                                      StructField("timestamp", StringType(), False),
                                      StructField("tag", StringType(), False)])
         history = history.toDF(history_schema)
-        # drops duplicates - if there are more tags per (paper, user) pair
-        history = history.select("citeulike_paper_id", "citeulike_user_hash", "timestamp").dropDuplicates()
-        # convert timestamp to TimestampType
+        history = history.drop("tag")
+        # # convert timestamp to TimestampType
         history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
+        # drops duplicates - if there are more tags per (paper, user) pair
+        history = history.dropDuplicates()
         return history
 
     def load_bag_of_words_per_paper(self, filename):

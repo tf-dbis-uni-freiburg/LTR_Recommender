@@ -56,11 +56,11 @@ class LTRSVMModel():
         keys = str(weights.keys())[4:-1].split(", ")
         for key in keys:
             vector = str(weights.get(int(key)))[6:-2].split(",")
-            self.modelWeights[int(key)] = _convert_to_vector(vector)
+            self.modelWeights[key] = _convert_to_vector(vector)
         # intercepts
         interceptsKeys = str(intercept.keys())[4:-1].split(", ")
         for key in interceptsKeys:
-            self.modelIntercepts[int(key)] = float(str(intercept.get(int(key)))[5:-1])
+            self.modelIntercepts[key] = float(str(intercept.get(int(key)))[5:-1])
         self.threshold = None
 
 
