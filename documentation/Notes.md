@@ -32,3 +32,14 @@
 ### Cluster mode: Splitting the data into folds and storing all 23 folds takes around 1.2 hour
 ### Cluster mode: Training a singe SVM model for all users takes
 ### Cluster mode: Training a singe SVM model for one user ()
+
+
+### New data set (10.05.2018)
+Creating and storing folds (LOCAL MODE) takes: 8 mins
+In total 5 folds: Data in period [2004-11-04, 2007-12-31].
+ - 1 fold - Training data [2004-11-04, 2005-05-04], Test data [2005-05-04, 2005-11-04]
+ - 2 fold - Training data [2004-11-04, 2005-11-04], Test data [2005-11-04, 2006-05-04]
+ - 3 fold - Training data [2004-11-04, 2006-05-04], Test data [2006-05-04, 2006-11-04]
+ - 4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
+ - 5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
+ Statistics for the folds can be found in new-dataset-folds-statistics.txt file.
