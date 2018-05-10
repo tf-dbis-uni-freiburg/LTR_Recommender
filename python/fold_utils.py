@@ -1,6 +1,7 @@
 from scipy.sparse.dia import dia_matrix
 from pyspark.sql import functions as F
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
+from dateutil import parser
 from vectorizers import *
 from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
@@ -32,10 +33,6 @@ class Fold:
     DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME = "distributed-fold-"
     """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "fold-"
-    """ Prefix of the name of the folder in which the fold is stored in distributed manner. Used only for testing."""
-    LOCAL_PREFIX_FOLD_FOLDER_NAME = "local-distributed-fold-"
-
-    PREDICTION_DF_FILENAME = "prediction.parquet"
 
     def __init__(self, training_data_frame, test_data_frame):
         self.index = None
@@ -79,7 +76,6 @@ class Fold:
         self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index))
         # save paper corpus
         self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index))
-        self.folder_path = Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/"
 
     def store(self):
         """
@@ -95,9 +91,8 @@ class Fold:
         self.training_data_frame.coalesce(1).write.csv(Fold.get_training_data_frame_path(self.index, distributed=False))
         # save paper corpus
         self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
-        self.folder_path = Fold.PREFIX_FOLD_FOLDER_NAME + str(self.index) + "/"
 
-    def store(self):
+    def persist(self):
         self.test_data_frame.persist()
         self.training_data_frame.persist()
         self.papers_corpus.persist()
@@ -113,7 +108,6 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
-        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
         if(distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TEST_DF_CSV_FILENAME
         else:
@@ -130,7 +124,6 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
-        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.TRAINING_DF_CSV_FILENAME
         else:
@@ -147,7 +140,6 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
-        #return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
         else:
@@ -180,7 +172,6 @@ class Fold:
         :param distributed: if the fold was stored in distributed or non-distributed manner
         :return: path to the file/folder
         """
-        # return Fold.LOCAL_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.
         if (distributed):
             return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + str(model_training) + "-" + Fold.PREDICTION_DF_FILENAME
         else:
@@ -202,8 +193,13 @@ class FoldSplitter:
         as its training set. The test set will contain the rows with timestamps in interval [the least recent date + 
         period_in_months , the least recent date + 2 * period_in_months]. For the next fold we include the rows from the next
         "period_in_months" period. And again the rows from the last "period_in_months" period are included in the test set 
-        and everything else in the training set. Currently, in total 23 folds. Data in period [2004-11-04, 2016-11-11].
-        Last fold ends in 2016-11-04.
+        and everything else in the training set. 
+        Folds information: Currently, in total 5 folds. Data in period [2004-11-04, 2007-12-31].
+        1 fold - Training data [2004-11-04, 2005-05-04], Test data [2005-05-04, 2005-11-04]
+        2 fold - Training data [2004-11-04, 2005-11-04], Test data [2005-11-04, 2006-05-04]
+        3 fold - Training data [2004-11-04, 2006-05-04], Test data [2006-05-04, 2006-11-04]
+        4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
+        5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
         
         :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
         Each row represents a time when a user likes a paper. The format of the data frame is
@@ -221,13 +217,13 @@ class FoldSplitter:
         """
         asc_data_frame = history.orderBy(timestamp_col)
         start_date = asc_data_frame.first()[2]
+
         desc_data_frame = history.orderBy(timestamp_col, ascending=False)
         end_date = desc_data_frame.first()[2]
         fold_index = 1
         folds = []
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
-        # TODO REVERT
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
             fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
@@ -236,6 +232,7 @@ class FoldSplitter:
             fold.set_index(fold_index)
             # build the corpus for the fold, it includes all papers published til the end of the fold
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
+
             fold.set_papers_corpus(fold_papers_corpus)
             # add the fold to the result list
             folds.append(fold)
@@ -270,7 +267,7 @@ class FoldSplitter:
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
 
         # all distinct users in training data frame
-        user_ids = training_data_frame.select(userId_col).distinct()
+        user_ids = training_data_frame.select(userId_col).distinct().sort(userId_col)
 
         # remove users that are new, part of the test data but not from the training data
         test_data_frame = test_data_frame.join(user_ids, userId_col);
@@ -473,9 +470,9 @@ class FoldValidator():
             loadingTheFold = datetime.datetime.now()
             fold = self.load_fold(spark, i)
 
-            fold.training_data_frame.persist()
-            fold.test_data_frame.persist()
-            fold.papers_corpus.papers.persist()
+            # fold.training_data_frame.persist()
+            # fold.test_data_frame.persist()
+            # fold.papers_corpus.papers.persist()
 
             # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
@@ -492,7 +489,7 @@ class FoldValidator():
             # training TF IDF
             trainingLDA = datetime.datetime.now()
             #topics only for testing
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=150, maxIter=10, paperId_col=self.paperId_col,
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=10, maxIter=10, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="lda_vector")
             print("LDA trained.")
             tLDA = datetime.datetime.now() - trainingLDA
@@ -517,9 +514,9 @@ class FoldValidator():
             ltrPrediction = datetime.datetime.now()
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
 
-            fold.training_data_frame.unpersist()
-            fold.test_data_frame.unpersist()
-            fold.papers_corpus.papers.unpersist()
+            # fold.training_data_frame.unpersist()
+            # fold.test_data_frame.unpersist()
+            # fold.papers_corpus.papers.unpersist()
 
             ltrPr = datetime.datetime.now() - ltrPrediction
             file = open("results/execution.txt", "a")
@@ -765,7 +762,7 @@ class FoldEvaluator:
 
         print("Store evaluation per user.")
         # store results per fold
-        self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
+        #self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
 
         # store overall results
         evaluations = {}
@@ -791,7 +788,7 @@ class FoldEvaluator:
         if(distributed):
             evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, model_training))
         else:
-            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
+            evaluations_per_user.toPandas() #.to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
 
     def append_fold_overall_result(self, fold_index, overall_evaluation):
         """

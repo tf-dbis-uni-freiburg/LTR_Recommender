@@ -102,23 +102,16 @@ class Loader:
     def load_papers_mapping(self, filename):
         """
         Loads the mapping between the paper_id (which is used in this data set) and the citeulike_paper_id
-        Each line contains citeulike_paper_id and paper_id separated by space.
+        Each line contains citeulike_paper_id and paper_id separated by comma. File contains a header
         
         :param filename: name of the file which contains mapping between paper_id and citeulike_paper_id
         :return: data frame with two columns - paper_id, citeulike_paper_id
         """
-        papers_mapping = self.spark.sparkContext.textFile(self.path + filename)
-        # remove header
-        header = papers_mapping.first()
-        papers_mapping = papers_mapping.filter(lambda line: line != header)
-
-        # split each line
-        papers_mapping = papers_mapping.map(lambda x: x.split(" "))
-
-        # (name, dataType, nullable)
-        papers_mapping_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                            StructField("paper_id", StringType(), False)])
-        papers_mapping = papers_mapping.toDF(papers_mapping_schema)
+        papersMappingSchema = StructType([
+            #  name, dataType, nullable
+            StructField("citeulike_paper_id", IntegerType(), False),
+            StructField("paper_id", IntegerType(), False)])
+        papers_mapping = self.spark.read.csv(self.path + filename, header=True, schema=papersMappingSchema)
         return papers_mapping
 
     def load_papers(self, filename):
@@ -163,21 +156,25 @@ class Loader:
         Note: Because there might be multiple tags per (paper, user) pair which will lead to multiple rows. 
         Duplicates are dropped.
         """
-        history = self.spark.sparkContext.textFile(self.path + filename)
-        # split each line
-        history = history.map(lambda x: x.split("|"))
-
-        # (name, dataType, nullable)
-        history_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                     StructField("citeulike_user_hash", StringType(), False),
-                                     StructField("timestamp", StringType(), False),
-                                     StructField("tag", StringType(), False)])
-        history = history.toDF(history_schema)
+        history_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
+                                    StructField("citeulike_paper_id", StringType(), False),
+                                    StructField("timestamp", StringType(), False),
+                                    StructField("tag", StringType(), False)])
+        history = self.spark.read.csv(self.path + filename, header=True, schema=history_schema)
         history = history.drop("tag")
-        # # convert timestamp to TimestampType
-        history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
         # drops duplicates - if there are more tags per (paper, user) pair
         history = history.dropDuplicates()
+
+        # generate user ids
+        user_hashes = history.select("citeulike_user_hash").distinct()
+
+        user_hash_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
+                                     StructField("user_id", IntegerType(), False)])
+        user_hashes = user_hashes.rdd.zipWithIndex().map(lambda x: (x[0][0] , int(x[1]))).toDF(user_hash_schema)
+        history = history.join(user_hashes, "citeulike_user_hash")
+
+        # convert timestamp to TimestampType
+        history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
         return history
 
     def load_bag_of_words_per_paper(self, filename):
