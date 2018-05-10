@@ -43,4 +43,5 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  - 3 fold - Training data [2004-11-04, 2006-05-04], Test data [2006-05-04, 2006-11-04]
  - 4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
  - 5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
- Statistics for the folds can be found in new-dataset-folds-statistics.txt file.
+ 
+ > Statistics for the folds can be found in new-dataset-folds-statistics.txt file.
