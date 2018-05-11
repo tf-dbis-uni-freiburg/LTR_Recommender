@@ -267,7 +267,7 @@ class FoldSplitter:
         training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
 
         # all distinct users in training data frame
-        user_ids = training_data_frame.select(userId_col).distinct().sort(userId_col)
+        user_ids = training_data_frame.select(userId_col).distinct()
 
         # remove users that are new, part of the test data but not from the training data
         test_data_frame = test_data_frame.join(user_ids, userId_col);
@@ -317,7 +317,7 @@ class FoldValidator():
     """
 
     """ Total number of folds. """
-    NUMBER_OF_FOLD = 23;
+    NUMBER_OF_FOLD = 5;
 
     # PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS
     # LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS
@@ -458,9 +458,9 @@ class FoldValidator():
         :param spark: spark instance used for loading the folds
         """
         # load folds one by one and evaluate on them
-        # total number of fold  - 23
+        # total number of fold  - 5
         print("Evaluate folds...")
-        for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
@@ -504,6 +504,13 @@ class FoldValidator():
             ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
             print("Fitting LTR.... Model:" + str(self.model_training))
+
+            # if PMU or SMMPU, removes from training data frame those users which do not appear in the test set, no need
+            # a model for them to be trained
+            if (self.model_training == "mpu" or self.model_training == "smmu"):
+                test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
+                fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
+
             ltr.fit(fold.training_data_frame)
             lrt = datetime.datetime.now() - ltrTraining
             file = open("results/execution.txt", "a")
@@ -700,6 +707,8 @@ class FoldEvaluator:
         get_candidate_set_per_user_udf = F.udf(get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
 
 
+        # exclude users that do not have a test set from evaluations
+
         # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
         training_user_library = fold.training_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("training_user_library"))
         training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
@@ -712,6 +721,12 @@ class FoldEvaluator:
             papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy(score_col, ascending=False).limit(self.max_top_k + max_training_library)
 
             top_papers_predictions = papers_corpus_with_predictions.groupBy().agg(F.collect_list(F.struct(paperId_col, score_col)).alias("predictions"))
+
+            # exclude those who do not have test set - This is not valid for MPU and SMMU, because
+            # these users were already excluded before the fit/training phase - no model for them
+            # was trained. While information about them was used in training SM
+            test_user_ids = fold.test_data_frame.select(userId_col).distinct()
+            training_user_library = training_user_library.join(test_user_ids, userId_col)
 
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
