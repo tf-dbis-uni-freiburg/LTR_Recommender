@@ -584,10 +584,9 @@ class LearningToRank(Estimator, Transformer):
                 # set threshold to NONE to receive raw predictions from the model
                 model.threshold = None
                 user_papers_corpus_predictions_rdd = user_papers_corpus.rdd.map(
-                    lambda p: (p.paper_id, p.citeulike_paper_id, p.userId, float(model.predict(p.userId, p.features))))
+                    lambda p: (p.paper_id, p.citeulike_paper_id, p.user_id, float(model.predict(p.user_id, p.features))))
 
                 # convert RDD to Data frame
-                # Load papers into DF
                 prediction_scheme = StructType([
                     #  name, dataType, nullable
                     StructField("paper_id", IntegerType(), False),
@@ -602,7 +601,6 @@ class LearningToRank(Estimator, Transformer):
                     papers_corpus_predictions = user_papers_corpus_predictions
                 else:
                     papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
-            user_papers_corpus_predictions.show()
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')

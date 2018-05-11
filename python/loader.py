@@ -109,7 +109,7 @@ class Loader:
         """
         papersMappingSchema = StructType([
             #  name, dataType, nullable
-            StructField("citeulike_paper_id", IntegerType(), False),
+            StructField("citeulike_paper_id", StringType(), False),
             StructField("paper_id", IntegerType(), False)])
         papers_mapping = self.spark.read.csv(self.path + filename, header=True, schema=papersMappingSchema)
         return papers_mapping
@@ -126,7 +126,7 @@ class Loader:
         # Load papers into DF
         papersSchema = StructType([
             #  name, dataType, nullable
-            StructField("citeulike_paper_id", IntegerType(), False),
+            StructField("citeulike_paper_id", StringType(), False),
             StructField("type", StringType(), True),
             StructField("journal", StringType(), True),
             StructField("book_title", StringType(), True),
