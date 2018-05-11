@@ -32,3 +32,10 @@
 [3]  T. Joachims. Optimizing Search Engines Using Clickthrough Data. Proceedings of the ACM Conference on Knowledge Discovery and Data Mining (KDD), ACM. 2002.  
 [4] Christopher J.C. Burges. From RankNet to LambdaRank to LambdaMART: An Overview. 2010 
 [5] Huan Xue, Jiafeng Guo, Yanyan Lan and Lei Cao. Personalized paper Recommendation in Online Social Scholar System. 2014
+
+
+## How to run
+
+```
+spark2-submit main.py -input <folder where input data is> -model_training <sm | smmu | mpu> -peers_count <number> -pairs_generation <dp | ocp | edp>
+```
