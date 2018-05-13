@@ -39,6 +39,6 @@ Total Partitions: 4
 Memory Size: 167.6 KB 
 
 - In total time taken: 
-- Evaluation received:
+- Evaluation received: 30 mins without saving overall results
 
 - When adding LDA topics to training set, data becomes 4.1GB
