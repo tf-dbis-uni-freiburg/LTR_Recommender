@@ -5,7 +5,9 @@
 - On fold 1, LDA topics:150, Peer papers:1, Pairs generation: edp (equally distributed pairs)
 - Steps
 -- fit LDA (44s)
+-- LDA training (15 mins)
 -- fit LTR (44s)
+
 - Fold 1 information
 
 -- paper corpus 
@@ -38,3 +40,5 @@ Memory Size: 167.6 KB
 
 - In total time taken: 
 - Evaluation received:
+
+- When adding LDA topics to training set, data becomes 4.1GB
