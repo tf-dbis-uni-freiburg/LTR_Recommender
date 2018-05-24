@@ -798,13 +798,13 @@ class FoldEvaluator:
         :param fold_index: identifier of a fold
         :param evaluations_per_user: data frame that contains a row per each user and its evaluation metrics
         :param distributed: 
-        :return: if the fold was stored in distributed or non-distributed manner
+        :return: if the fold has to be stored in distributed or non-distributed manner
         """
         # save evaluation results
         if(distributed):
             evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, model_training))
         else:
-            evaluations_per_user.toPandas() #.to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
+            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
 
     def append_fold_overall_result(self, fold_index, overall_evaluation):
         """
@@ -820,21 +820,6 @@ class FoldEvaluator:
             line = line + "| " + str(metric_value)
         file.write(line)
         file.close()
-
-    def calculate_prediction(features, coefficients):
-        """
-        Calculate a score prediction for a paper. Multiple its features vector
-        with the coefficients received from the model.
-
-        :param features: sparse vector, features vector of a paper
-        :param coefficients: model coefficient, weights for each feature
-        :return: prediction score 
-        """
-        cx = scipy.sparse.coo_matrix(features)
-        prediction = 0.0
-        for index, value in zip(cx.col, cx.data):
-            prediction += value * coefficients[index]
-        return float(prediction)
 
 class FoldStatisticsWriter:
     """
