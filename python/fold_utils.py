@@ -457,7 +457,7 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         print("Evaluate folds...")
-        for i in range(1,  FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, 2): # FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
@@ -468,9 +468,9 @@ class FoldValidator():
             fold = self.load_fold(spark, i)
 
             print("Persisting the fold ...")
-            fold.training_data_frame.persist()
-            fold.test_data_frame.persist()
-            fold.papers_corpus.papers.persist()
+            #fold.training_data_frame.persist()
+            #fold.test_data_frame.persist()
+            #fold.papers_corpus.papers.persist()
 
             # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
@@ -486,7 +486,7 @@ class FoldValidator():
             print("Start training LDA ...")
             # training TF IDF
             trainingLDA = datetime.datetime.now()
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=150, maxIter=10, paperId_col=self.paperId_col,
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=5, maxIter=10, paperId_col=self.paperId_col,
                                               tf_map_col=self.tf_map_col, output_col="lda_vector")
             print("LDA trained.")
             tLDA = datetime.datetime.now() - trainingLDA
