@@ -1,14 +1,11 @@
-from scipy.sparse.dia import dia_matrix
 from pyspark.sql import functions as F
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
-from dateutil import parser
 from vectorizers import *
 from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
 from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
-import scipy
 
 class Fold:
     """
@@ -490,6 +487,7 @@ class FoldValidator():
             print("Start training LDA ...")
             # training TF IDF
             trainingLDA = datetime.datetime.now()
+
             print("Paper corpus:")
             print(fold.papers_corpus.papers.count())
             #topics only for testing
@@ -499,13 +497,12 @@ class FoldValidator():
             tLDA = datetime.datetime.now() - trainingLDA
             print("Fitting LDA...")
             ldaModel = ldaVectorizer.fit(self.bag_of_words)
-            TODO revert writing in the file
             file = open("results/execution.txt", "a")
             file.write("Fitting LDA:" + str(tLDA) + "\n")
             file.close()
 
             # Training LTR
-            # ltrTraining = datetime.datetime.now()
+            ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
             print("Fitting LTR.... (contains LDA fitting).Model:" + str(self.model_training))
@@ -518,7 +515,7 @@ class FoldValidator():
             #     fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
 
             ltr.fit(fold.training_data_frame)
-            # TODO revert writing in the file
+
             lrt = datetime.datetime.now() - ltrTraining
             file = open("results/execution.txt", "a")
             file.write("Training LTR(fit)(+ LDA transform), type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
@@ -540,14 +537,14 @@ class FoldValidator():
             #papers_corpus_with_predictions.persist()
 
             # paper_id | citeulike_paper_id | ranking_score
-            #papers_corpus_with_predictions.show()
+            papers_corpus_with_predictions.show()
 
             # EVALUATION
             eval = datetime.datetime.now()
 
             # print("Starting evaluations...")
             FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-                .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+             .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
             evalTime = datetime.datetime.now() - eval
             file = open("results/execution.txt", "a")
             file.write("Evaluation:" + str(evalTime) + "\n")
@@ -855,21 +852,6 @@ class FoldEvaluator:
         file.write(line)
         file.close()
 
-    def calculate_prediction(features, coefficients):
-        """
-        Calculate a score prediction for a paper. Multiple its features vector
-        with the coefficients received from the model.
-
-        :param features: sparse vector, features vector of a paper
-        :param coefficients: model coefficient, weights for each feature
-        :return: prediction score 
-        """
-        cx = scipy.sparse.coo_matrix(features)
-        prediction = 0.0
-        for index, value in zip(cx.col, cx.data):
-            prediction += value * coefficients[index]
-        return float(prediction)
-
 class FoldStatisticsWriter:
     """
     Class that extracts statistics from different folds. For example, number of users in training set, test set and in total.
@@ -885,7 +867,7 @@ class FoldStatisticsWriter:
         file = open("results/" + filename, "a")
         # write the header in the file
         file.write(
-            "fold_index | fold_time | #UTot | #UTR | #UTS | #dU | #ITot | #ITR | #ITS | #nI |"
+            "fold_index | fold_time | #UTot | #UTR | #UTS | #dU | #nU | #ITot | #ITR | #ITS | #dI | #nI |"
             " #RTot | #RTR | #RTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
         file.close()
 
@@ -911,7 +893,7 @@ class FoldStatisticsWriter:
         test_data_frame = fold.test_data_frame.select(paperId_col, userId_col)
         full_data_set = training_data_frame.union(test_data_frame)
 
-        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | \n"
+        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | \n"
 
         # ratings statistics
         total_ratings_count = full_data_set.count()
@@ -925,14 +907,20 @@ class FoldStatisticsWriter:
         test_users = test_data_frame.select(userId_col).distinct()
         test_users_count = test_users.count()
 
-        new_users_count = tr_users.subtract(test_users).count()
+        diff_users_count = tr_users.subtract(test_users).count()
+        new_users_count = test_users.subtract(tr_users).count()
+
         # items in total, TR, TS (with or without new items)
         total_items_count = full_data_set.select(paperId_col).distinct().count()
         tr_items = training_data_frame.select(paperId_col).distinct()
         tr_items_count = tr_items.count()
         test_items = test_data_frame.select(paperId_col).distinct()
         test_items_count = test_items.count()
-        new_items_count = tr_items.subtract(test_items).count()
+
+        # papers that appear only in the training set
+        diff_items_count = tr_items.subtract(test_items).count()
+        # papers that appear only in the test set but not in the training set
+        new_items_count = test_items.subtract(tr_items).count()
 
         # ratings per user - min/max/avg/std in TR
         tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
@@ -940,8 +928,8 @@ class FoldStatisticsWriter:
         tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
         tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
         tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
-        #
-        # # ratings per user - min/max/avg/std in TS
+
+        # ratings per user - min/max/avg/std in TS
         ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
         ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
         ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
@@ -963,10 +951,10 @@ class FoldStatisticsWriter:
         ts_std_ratings_per_item = ts_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
 
         # write the collected statistics in a file
-        file = open(self.filename, "a")
+        file = open("results/" + self.filename, "a")
         fold_time = str(fold.tr_start_date) + "-" + str(fold.ts_start_date) + "-" + str(fold.ts_end_date)
-        formatted_line = line.format(fold.index, fold_time, total_users_count, tr_users_count, test_users_count, new_users_count, \
-                                     total_items_count, tr_items_count, test_items_count, new_items_count, \
+        formatted_line = line.format(fold.index, fold_time, total_users_count, tr_users_count, test_users_count, diff_users_count, new_users_count, \
+                                     total_items_count, tr_items_count, test_items_count, diff_items_count, new_items_count, \
                                      total_ratings_count, tr_ratings_count, ts_ratings_count, \
                                      str(tr_min_ratings_per_user) + "/" + str(tr_max_ratings_per_user) +
                                      "/" + "{0:.2f}".format(tr_avg_ratings_per_user) + "/" + "{0:.2f}".format(tr_std_ratings_per_user) \
@@ -975,6 +963,6 @@ class FoldStatisticsWriter:
                                         str(tr_min_ratings_per_item) + "/" + str(tr_max_ratings_per_item) + "/" +
                                      "{0:.2f}".format(tr_avg_ratings_per_item) + "/" + "{0:.2f}".format(tr_std_ratings_per_item), \
                                     str(ts_min_ratings_per_item) + "/" + str(ts_max_ratings_per_item) + "/" +
-                                     "{0:.2f}".format(ts_avg_ratings_per_item) + "/" + "{0:.2f}".format(ts_std_ratings_per_item))
+                                    "{0:.2f}".format(ts_avg_ratings_per_item) + "/" + "{0:.2f}".format(ts_std_ratings_per_item))
         file.write(formatted_line)
         file.close()

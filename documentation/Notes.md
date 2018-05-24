@@ -45,3 +45,10 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  - 5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
  
  > Statistics for the folds can be found in new-dataset-folds-statistics.txt file.
+ 
+ #### Fold 1
+ - paper corpus for fold 1: 159 453 papers
+ - number of ratings in the training set 10333
+ - After LDA transfrom number of ratings -> 10297 ???
+ - after pair generation 10333 
+ 
