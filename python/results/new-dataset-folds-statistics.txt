@@ -12,11 +12,13 @@ fold_time (st/mt/et) -  the time fold expands over; start of the training set - 
 UTot - total number of users in the fold
 UTR - number of users in the training set of the fold
 UTS - number of users in the test set of the fold
-nU - new users that appear only in the test set
+dU - number of users that appear only in the training set
+nU - number of users that appear only in the test set but not in the training set
 ITot - total number of items(distinct ranked papers) in the fold
 ITR - number of items in the training set of the fold
 ITS -  number of items in the test set of the fold
-nI - new items that appear only in the test set
+dI - number of items(papers) that appear only in the training set
+nI - number of items(papers) that appear only in the test set but not in the training set
 RTot - total number of liked papers, total number of votes/likes users have given in the time of the fold
 RTR - total number of liked papers in the training set of the fold
 RTS - total number of liked papers in the test set of the fold
