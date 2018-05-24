@@ -438,6 +438,7 @@ class LearningToRank(Estimator, Transformer):
 
         print("peer generation...")
         print(dataset.count())
+
         # add lda paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
         print("Paper id LDA transform...")
@@ -451,6 +452,7 @@ class LearningToRank(Estimator, Transformer):
         # add lda ids paper representation for peer papers
         self.paper_profiles_model.setPaperIdCol("peer_paper_id")
         self.paper_profiles_model.setOutputCol("peer_paper_lda_vector")
+
         # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
         dataset = self.paper_profiles_model.transform(dataset)
         print(dataset.count())
@@ -474,8 +476,8 @@ class LearningToRank(Estimator, Transformer):
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
-                # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
-                return LabeledPoint(line[7], line[6])
+                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
+                return LabeledPoint(line[5], line[4])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
@@ -500,7 +502,8 @@ class LearningToRank(Estimator, Transformer):
         # of the next SVM model
         self.paper_profiles_model.setPaperIdCol(former_papeId_column)
         self.paper_profiles_model.setOutputCol(former_paper_output_column)
-        print("Training finished.")
+
+        print("Training LTRModel finished.")
         return lsvcModel
 
     def _transform(self, papers_corpus):
@@ -575,16 +578,14 @@ class LearningToRank(Estimator, Transformer):
             papers_corpus_predictions = papers_corpus_predictions.toDF(prediction_scheme)
 
         elif (self.model_training == "smmu"):
-            print("Preducting smmu")
+            print("Predicting smmu...")
             model = self.models[0]
-            papers_corpus_predictions = None
 
-            # TODO is there a need to transfrom the paper corpus again???
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
             self.paper_profiles_model.setOutputCol(self.features_col)
             # add paper representation to each paper in the corpus
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
-            print("Transform the corpus again.")
+
             # TODO optimize by removing papers from the training set
             # make predictions using the model over full papers corpus
             papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
@@ -592,9 +593,10 @@ class LearningToRank(Estimator, Transformer):
             userIds = []
             for key in model.modelWeights:
                 keySt = str(key)
-                print("User id "+ keySt)
                 userIdRow = Row(user_id=keySt)
                 userIds.append(userIdRow)
+
+            print("Users:" * str(len(userIds)))
 
             # add user id to each row to distinguish which model was used for these predictions
             user_ids_df = self.spark.createDataFrame(userIds)
@@ -605,7 +607,7 @@ class LearningToRank(Estimator, Transformer):
             user_papers_corpus_predictions_rdd = user_papers_corpus.rdd.map(lambda p: (
                     p.paper_id, p.citeulike_paper_id, p.user_id, float(model.predict(p.user_id, p.features))))
 
-            print("adding predictions")
+            print("Adding predictions")
             # convert RDD to Data frame
             prediction_scheme = StructType([
                 #  name, dataType, nullable
@@ -619,5 +621,7 @@ class LearningToRank(Estimator, Transformer):
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
+        print("Prediction size:")
         print(papers_corpus_predictions.count())
+        # paper_id | citeulike_paper_id| user_id | ranking_score|
         return papers_corpus_predictions

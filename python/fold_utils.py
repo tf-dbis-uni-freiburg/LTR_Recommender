@@ -467,18 +467,23 @@ class FoldValidator():
             loadingTheFold = datetime.datetime.now()
             fold = self.load_fold(spark, i)
 
-            print("Persisting the fold ...")
-            #fold.training_data_frame.persist()
-            #fold.test_data_frame.persist()
-            #fold.papers_corpus.papers.persist()
-
+            # drop some unneeded columns
             # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
-
             # citeulike_paper_id | user_id | paper_id|
             fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
 
-            # TODO revert writing in the file
+            # if PMU or SMMPU, removes from training data frame those users which do not appear in the test set, no need
+            # a model for them to be trained
+            if (self.model_training == "mpu" or self.model_training == "smmu"):
+                test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
+                fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
+
+            print("Persisting the fold ...")
+            fold.training_data_frame.persist()
+            fold.test_data_frame.persist()
+            fold.papers_corpus.papers.persist()
+
             lf = datetime.datetime.now() - loadingTheFold
             file = open("results/execution.txt", "a")
             file.write("Loading the fold " + str(lf) + "\n")
@@ -487,12 +492,8 @@ class FoldValidator():
             print("Start training LDA ...")
             # training TF IDF
             trainingLDA = datetime.datetime.now()
+            # TODO revert topics only for testing
             ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=5, maxIter=10, paperId_col=self.paperId_col, tf_map_col=self.tf_map_col, output_col="lda_vector")
-
-            print("Paper corpus:")
-            print(fold.papers_corpus.papers.count())
-            #topics only for testing
-
 
             print("LDA trained.")
             tLDA = datetime.datetime.now() - trainingLDA
@@ -506,24 +507,19 @@ class FoldValidator():
             ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
+
+
             print("Fitting LTR.... (contains LDA fitting).Model:" + str(self.model_training))
-
-            # This is already done when splitting into folds
-            # # if PMU or SMMPU, removes from training data frame those users which do not appear in the test set, no need
-            # # a model for them to be trained
-            # if (self.model_training == "mpu" or self.model_training == "smmu"):
-            #     test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
-            #     fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
-
             ltr.fit(fold.training_data_frame)
 
             lrt = datetime.datetime.now() - ltrTraining
             file = open("results/execution.txt", "a")
             file.write("Training LTR(fit)(+ LDA transform), type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
             file.close()
+
             print("Making predictions...")
 
-            # # PREDICTION by LTR
+            # PREDICTION by LTR
             ltrPrediction = datetime.datetime.now()
             print("Transforming the paper corpus by using the model")
             papers_corpus_with_predictions = ltr.transform(fold.papers_corpus.papers)
@@ -532,18 +528,17 @@ class FoldValidator():
             file = open("results/execution.txt", "a")
             file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
             file.close()
-            papers_corpus_with_predictions.collect()
 
             #print("Persist the predictions.")
             #papers_corpus_with_predictions.persist()
 
-            # paper_id | citeulike_paper_id | ranking_score
+            # (paper_id | citeulike_paper_id | ranking_score)  OR (paper_id | citeulike_paper_id| user_id | ranking_score)
             papers_corpus_with_predictions.show()
 
             # EVALUATION
             eval = datetime.datetime.now()
 
-            # print("Starting evaluations...")
+            print("Starting evaluations...")
             FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
              .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
             evalTime = datetime.datetime.now() - eval
@@ -551,12 +546,11 @@ class FoldValidator():
             file.write("Evaluation:" + str(evalTime) + "\n")
             file.close()
 
-            print("Unpersist the paper corpus.")
-            # fold.papers_corpus.papers.unpersist()
-            print("Unpersist the fold and prediction.")
-            #papers_corpus_with_predictions.unpersist()
-            #fold.training_data_frame.unpersist()
-            #fold.test_data_frame.unpersist()
+            print("Unpersist the data")
+            # papers_corpus_with_predictions.unpersist()
+            fold.training_data_frame.unpersist()
+            fold.test_data_frame.unpersist()
+            fold.papers_corpus.papers.unpersist()
 
 
 class FoldEvaluator:
@@ -617,7 +611,7 @@ class FoldEvaluator:
             # sort by prediction
             sorted_prediction_papers = sorted(total_predicted_papers, key=lambda tup: tup[1], reverse=True)
             training_paper_set = set(training_papers)
-            filtered_sorted_prediction_papers = [(float(x), float(y)) for x, y in sorted_prediction_papers if
+            filtered_sorted_prediction_papers = [(x, float(y)) for x, y in sorted_prediction_papers if
                                                  x not in training_paper_set]
             return filtered_sorted_prediction_papers[:k]
 
@@ -718,9 +712,8 @@ class FoldEvaluator:
         get_candidate_set_per_user_udf = F.udf(get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
 
         # extract liked papers for each user in the training data set, when top-k for a user is extracted, remove those on which a model is trained
+        # for fold 1, we have 164 (all users part of the training and the test set) rows equals to the number of users for example
         training_user_library = fold.training_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("training_user_library"))
-        print("TRaining user library")
-        print(training_user_library.count())
         training_user_library_size = training_user_library.select(F.size("training_user_library").alias("tr_library_size"))
         max_training_library = training_user_library_size.groupBy().max("tr_library_size").collect()[0][0]
 
@@ -741,10 +734,7 @@ class FoldEvaluator:
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
         elif(self.model_training == "mpu" or self.model_training == "smmu"): #LearningToRank.Model_Training.MODEL_PER_USER): # SINGLE_MODEL_MULTIPLE_USERS
-            print("SMMU evaluation")
-            # TODO optimization only users that are part of a test set are needed for evaluation, not all users in the training data set
-            print("Before filtering size:")
-            print(papers_corpus_with_predictions.count())
+            print("Model training: smmu OR mpu")
             # order by score per user
             window = Window.partitionBy(userId_col).orderBy(F.col(score_col).desc())
 
@@ -752,12 +742,8 @@ class FoldEvaluator:
             # take max top k + max_training_library size per user
             papers_corpus_with_predictions = papers_corpus_with_predictions.select('*', F.rank().over(window).alias('rank')).filter(F.col('rank') <= limit)
 
-            print("After filtering size:")
-            print(papers_corpus_with_predictions.count())
             candidate_papers_per_user = papers_corpus_with_predictions.groupBy(userId_col).agg(F.collect_list(F.struct(paperId_col, score_col)).alias("predictions"))
 
-            print("candidate per user size")
-            print(candidate_papers_per_user.count())
             # add training data set to user
             candidate_papers_per_user = candidate_papers_per_user.join(training_user_library, userId_col)
 
@@ -766,21 +752,14 @@ class FoldEvaluator:
             raise ValueError('The option' + self.model_training + ' is not supported.')
 
         candidate_papers_per_user = candidate_papers_per_user.withColumn("candidate_papers_set", get_candidate_set_per_user_udf("predictions", "training_user_library", F.lit(self.max_top_k)))
+        # user_id | candidate_papers_set
         candidate_papers_per_user = candidate_papers_per_user.select(userId_col, "candidate_papers_set")
-
-        print("candiate set:")
-        print(candidate_papers_per_user.count())
-        candidate_papers_per_user.show()
 
         # add test user library to each user
         test_user_library = fold.test_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("test_user_library"))
 
-        print("test_user_library")
-        print(test_user_library.count())
+        # user_id | test_user_library | candidate_papers_set |
         evaluation_per_user = test_user_library.join(candidate_papers_per_user, userId_col)
-
-        evaluation_per_user.show()
-        print(evaluation_per_user.count())
 
         print("Adding evaluation...")
         evaluation_columns = []
@@ -801,17 +780,19 @@ class FoldEvaluator:
             column_name = "NDCG@" + str(k)
             evaluation_columns.append(column_name)
             evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
-
+        # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("candidate_papers_set", "test_user_library")
         print("Store evaluation per user.")
 
-        evaluation_per_user.show()
-        print("Evaluation count:")
-        print(evaluation_per_user.count())
         # store results per fold
         self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
 
         # store overall results
+        # drop user id column
+        evaluation_per_user = evaluation_per_user.drop(userId_col)
+        avg = evaluation_per_user.groupBy().agg(F.avg()).collect()
+        avg.show()
+
         # evaluations = {}
         # print("Store overall evaluations...")
         # # compute avg over all columns

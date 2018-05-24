@@ -396,6 +396,7 @@ class LDAModel(Transformer):
         :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
+        print("Transform in LDA. Data count:")
         print(dataset.count())
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
