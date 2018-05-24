@@ -427,6 +427,8 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper ids used for training
         :return: a SVM model
         """
+        print("Train a single model.")
+        print(dataset.count())
         # 1) Peer papers sampling
         nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
                                 userId_col=self.userId_col,
@@ -434,19 +436,26 @@ class LearningToRank(Estimator, Transformer):
         # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
 
+        print("peer generation...")
+        print(dataset.count())
         # add lda paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
+        print("Paper id LDA transform...")
+        print(dataset.count())
 
         # get in which columns the result of the transform is stored
         former_paper_output_column = self.paper_profiles_model.output_col
         former_papeId_column = self.paper_profiles_model.paperId_col
 
+        print("Peer paper LDA transform.")
         # add lda ids paper representation for peer papers
         self.paper_profiles_model.setPaperIdCol("peer_paper_id")
         self.paper_profiles_model.setOutputCol("peer_paper_lda_vector")
         # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
         dataset = self.paper_profiles_model.transform(dataset)
+        print(dataset.count())
 
+        print("Pair generation.")
         # 2) pair building
         # peer_paper_lda_vector, paper_lda_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
@@ -456,7 +465,10 @@ class LearningToRank(Estimator, Transformer):
                                               output_col=self.features_col, label_col="label")
         # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
+        print(dataset.count())
 
+        # drop lda vectors - not needed anymore
+        dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
         lsvcModel = None
         if (self.model_training == "mpu" or self.model_training == "sm"):
             # create Label Points needed for the model
@@ -471,11 +483,12 @@ class LearningToRank(Estimator, Transformer):
             lsvcModel = SVMWithSGD().train(labeled_data_points)
 
         elif (self.model_training == "smmu"):
+            print("Model training")
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
-                # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
                 # userId, label, features
-                return UserLabeledPoint(int(line[2]), line[7], line[6])
+                return UserLabeledPoint(int(line[2]), line[5], line[4])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
@@ -487,6 +500,7 @@ class LearningToRank(Estimator, Transformer):
         # of the next SVM model
         self.paper_profiles_model.setPaperIdCol(former_papeId_column)
         self.paper_profiles_model.setOutputCol(former_paper_output_column)
+        print("Training finished.")
         return lsvcModel
 
     def _transform(self, papers_corpus):
@@ -561,48 +575,49 @@ class LearningToRank(Estimator, Transformer):
             papers_corpus_predictions = papers_corpus_predictions.toDF(prediction_scheme)
 
         elif (self.model_training == "smmu"):
+            print("Preducting smmu")
             model = self.models[0]
             papers_corpus_predictions = None
 
+            # TODO is there a need to transfrom the paper corpus again???
             self.paper_profiles_model.setPaperIdCol(self.paperId_col)
             self.paper_profiles_model.setOutputCol(self.features_col)
             # add paper representation to each paper in the corpus
             papers_corpus = self.paper_profiles_model.transform(papers_corpus)
+            print("Transform the corpus again.")
+            # TODO optimize by removing papers from the training set
+            # make predictions using the model over full papers corpus
+            papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
 
+            userIds = []
             for key in model.modelWeights:
                 keySt = str(key)
-                # TODO optimize by removing papers from the training set
-                # make predictions using the model over full papers corpus
-                papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
-
+                print("User id "+ keySt)
                 userIdRow = Row(user_id=keySt)
-                key = [userIdRow]
-                # add user id to each row to distinguish which model was used for these predictions
-                user_id_df = self.spark.createDataFrame(key)
-                user_papers_corpus = papers_corpus.crossJoin(user_id_df)
+                userIds.append(userIdRow)
 
-                # set threshold to NONE to receive raw predictions from the model
-                model.threshold = None
-                user_papers_corpus_predictions_rdd = user_papers_corpus.rdd.map(
-                    lambda p: (p.paper_id, p.citeulike_paper_id, p.user_id, float(model.predict(p.user_id, p.features))))
+            # add user id to each row to distinguish which model was used for these predictions
+            user_ids_df = self.spark.createDataFrame(userIds)
+            user_papers_corpus = papers_corpus.crossJoin(user_ids_df)
 
-                # convert RDD to Data frame
-                prediction_scheme = StructType([
-                    #  name, dataType, nullable
-                    StructField("paper_id", IntegerType(), False),
-                    StructField("citeulike_paper_id", StringType(), True),
-                    StructField("user_id", IntegerType(), True),
-                    StructField("ranking_score", FloatType(), True)
-                ])
-                user_papers_corpus_predictions = user_papers_corpus_predictions_rdd.toDF(prediction_scheme)
+            # set threshold to NONE to receive raw predictions from the model
+            model.threshold = None
+            user_papers_corpus_predictions_rdd = user_papers_corpus.rdd.map(lambda p: (
+                    p.paper_id, p.citeulike_paper_id, p.user_id, float(model.predict(p.user_id, p.features))))
 
-                # add predictions for a user to the final set of predictions
-                if (papers_corpus_predictions == None):
-                    papers_corpus_predictions = user_papers_corpus_predictions
-                else:
-                    papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
+            print("adding predictions")
+            # convert RDD to Data frame
+            prediction_scheme = StructType([
+                #  name, dataType, nullable
+                StructField("paper_id", IntegerType(), False),
+                StructField("citeulike_paper_id", StringType(), True),
+                StructField("user_id", StringType(), True),
+                StructField("ranking_score", FloatType(), True)
+            ])
+            papers_corpus_predictions = user_papers_corpus_predictions_rdd.toDF(prediction_scheme)
+
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
-
+        print(papers_corpus_predictions.count())
         return papers_corpus_predictions
