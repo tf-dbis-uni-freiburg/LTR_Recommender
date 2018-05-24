@@ -344,7 +344,7 @@ class LDAVectorizer(Estimator):
         papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
         # Trains a LDA model.
         # The number of topics(clusters) to infer. Must be > 1.
-        lda = LDA(featuresCol = "tf_vector", k = self.k_topics, maxIter = self.maxIter)
+        lda = LDA(featuresCol = "tf_vector", k = self.k_topics)
         model = lda.fit(papers_tf_vectors)
 
         # paper_id | lda_vector
@@ -396,6 +396,7 @@ class LDAModel(Transformer):
         :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
+        print(dataset.count())
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
 

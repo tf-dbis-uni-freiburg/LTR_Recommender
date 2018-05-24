@@ -78,7 +78,7 @@ class LTRSVMModel():
         Predict a value for a single point using the user's model trained.
         """
         x = _convert_to_vector(x)
-        margin = self.weights[userId].dot(x) + self.intercept[userId]
+        margin = self.modelWeights[userId].dot(x) + self.modelIntercepts[userId]
         if self.threshold is None:
             return margin
         else:
