@@ -48,7 +48,7 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  
  #### Fold 1
  - paper corpus for fold 1: 159 453 papers
- - # ratining in the training set 10333
- - After LDA transfrom 10297 ???
- - after pair generation 10333 TODO check that???
+ - number of ratings in the training set 10333
+ - After LDA transfrom number of ratings -> 10297 ???
+ - after pair generation 10333 
  
