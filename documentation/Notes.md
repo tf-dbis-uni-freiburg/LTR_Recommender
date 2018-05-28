@@ -49,7 +49,9 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  #### Fold 1
  - paper corpus for fold 1: 159 453 papers
  - number of ratings in the training set 10333
- - After LDA transfrom number of ratings -> 10297 ???
- - after pair generation 10343 ???
- - number of predictions 36 036 378 ????
- 
+ - After filtering for SMMU and MPU, ratings in the training set left 8 127
+ - After LDA transformation for both paper and its peer pair, ratings leftn 8 093
+ - After Pair Generation:
+ -- if edp (equally distributed pairs) - 8131 examples
+ -- if dp (duplicated pairs) - 16 186 examples
+ -- if ocp (one class pair) - 8093 examples
