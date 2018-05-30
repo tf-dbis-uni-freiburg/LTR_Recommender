@@ -593,7 +593,7 @@ class LearningToRank(Estimator, Transformer):
                 userIdRow = Row(user_id=keySt)
                 userIds.append(userIdRow)
 
-            print("Users:" * str(len(userIds)))
+            print("Users:" + str(len(userIds)))
 
             # add user id to each row to distinguish which model was used for these predictions
             user_ids_df = self.spark.createDataFrame(userIds)

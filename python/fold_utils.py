@@ -191,7 +191,7 @@ class FoldSplitter:
         as its training set. The test set will contain the rows with timestamps in interval [the least recent date + 
         period_in_months , the least recent date + 2 * period_in_months]. For the next fold we include the rows from the next
         "period_in_months" period. And again the rows from the last "period_in_months" period are included in the test set 
-        and everything else in the training set. 
+        and everything else in the training set. Paper corpus contains all papers in a fold.
         Folds information: Currently, in total 5 folds. Data in period [2004-11-04, 2007-12-31].
         1 fold - Training data [2004-11-04, 2005-05-04], Test data [2005-05-04, 2005-11-04]
         2 fold - Training data [2004-11-04, 2005-11-04], Test data [2005-11-04, 2006-05-04]
@@ -202,8 +202,6 @@ class FoldSplitter:
         :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
         Each row represents a time when a user likes a paper. The format of the data frame is
         (user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_id)
-        :param papers: data frame that contains representation of all papers. It is used for building a paper corpus for 
-        a fold.
         :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids. 
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test 
@@ -234,7 +232,6 @@ class FoldSplitter:
             # build the corpus for the fold, it includes all papers part of the fold
             fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col)\
                 .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
-
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
 
             fold.set_papers_corpus(fold_papers_corpus)
@@ -354,8 +351,7 @@ class FoldValidator():
     def create_folds(self, history, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
-        papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
-        of the fold to which it corresponds. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
+        all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
         Statistics are also stored for each fold.
 
         :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
