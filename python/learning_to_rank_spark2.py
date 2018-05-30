@@ -587,6 +587,7 @@ class LearningToRank(Estimator, Transformer):
             # make predictions using the model over full papers corpus
             papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
 
+            print(len(model.modelWeights))
             userIds = []
             for key in model.modelWeights:
                 keySt = str(key)

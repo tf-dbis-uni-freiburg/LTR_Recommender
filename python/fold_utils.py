@@ -25,6 +25,8 @@ class Fold:
     TRAINING_DF_CSV_FILENAME = "training.csv"
     """ Name of the file in which papers corpus of the fold is stored. """
     PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
+    """ Name of the file in which LDA data frame of the fold is stored. """
+    LDA_DF_CSV_FILENAME = "lda-papers.csv"
     """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.csv"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
@@ -42,6 +44,7 @@ class Fold:
         self.ts_start_date = None
         self.papers_corpus = None
         self.folder_path = None
+        self.ldaModel = None
 
     def set_index(self, index):
         self.index = index
@@ -63,7 +66,8 @@ class Fold:
 
     def store_distributed(self):
         """
-        For a fold, store its test data frame, training data frame and its papers corpus.
+        For a fold, store its test data frame, training data frame, its papers corpus and lda profiles for all
+        paper in its paper corpus.
         All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
         of a fold. For example, for a fold with index 2, the stored information for it will be in
         "distributed-fold-2" folder.
@@ -74,10 +78,13 @@ class Fold:
         self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index))
         # save paper corpus
         self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index))
+        # save lda paper profiles
+        self.ldaModel.paper_profiles.write.csv(Fold.get_lda_papers_frame_path(self.index))
 
     def store(self):
         """
-        For a fold, store its test data frame, training data frame and its papers corpus.
+        For a fold, store its test data frame, training data frame, its papers corpus and lda profiles for all
+        paper in its paper corpus.
         Each data frame will be stored in a single csv file.
         All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
         of a fold. For example, for a fold with index 2, the stored information for it will be in
@@ -89,11 +96,9 @@ class Fold:
         self.training_data_frame.coalesce(1).write.csv(Fold.get_training_data_frame_path(self.index, distributed=False))
         # save paper corpus
         self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
+        # save lda paper profiles
+        self.ldaModel.paper_profiles.coalesce(1).write.csv(Fold.get_lda_papers_frame_path(self.index, distributed=False))
 
-    def persist(self):
-        self.test_data_frame.persist()
-        self.training_data_frame.persist()
-        self.papers_corpus.persist()
 
     @staticmethod
     def get_test_data_frame_path(fold_index, distributed=True):
@@ -175,14 +180,30 @@ class Fold:
         else:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + str(model_training) + Fold.PREDICTION_DF_FILENAME
 
+    @staticmethod
+    def get_lda_papers_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where lda papers data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if (distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_CSV_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_CSV_FILENAME
+
 class FoldSplitter:
     """
     Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
     When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    def split_into_folds(self, history, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id"):
+    def split_into_folds(self, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least 
@@ -209,6 +230,9 @@ class FoldSplitter:
         :param paperId_col: name of the column that stores paper ids in the input data frames
         :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
         :param userId_col name of the column that stores user ids in the input data frames
+        :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
+        column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
+        in a particular paper
         :return: list of folds. Each fold is an object Fold. 
         """
         asc_data_frame = history.orderBy(timestamp_col)
@@ -233,8 +257,15 @@ class FoldSplitter:
             fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col)\
                 .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
-
             fold.set_papers_corpus(fold_papers_corpus)
+
+            # train LDA
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=150,
+                                          paperId_col=paperId_col, tf_map_col=tf_map_col,
+                                          output_col="lda_vector")
+            ldaModel = ldaVectorizer.fit(bag_of_words)
+
+            fold.ldaModel = ldaModel
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
@@ -322,12 +353,11 @@ class FoldValidator():
 
     # PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS
     # LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS
-    def __init__(self, bag_of_words, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
+    def __init__(self, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                  userId_col="user_id", tf_map_col="term_occurrence", model_training = "sm"):
         """
         Construct FoldValidator object.
-        
-        :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
+
         :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank 
         :param pairs_generation: DUPLICATED_PAIRS, ONE_CLASS_PAIRS, EQUALLY_DISTRIBUTED_PAIRS. See Pairs_Generation enum
         :param paperId_col: name of a column that contains identifier of each paper
@@ -342,13 +372,12 @@ class FoldValidator():
         self.userId_col = userId_col
         self.citeulikePaperId_col = citeulikePaperId_col
         self.peer_papers_count = peer_papers_count
-        self.bag_of_words = bag_of_words
         self.pairs_generation = pairs_generation
         self.userId_col = userId_col
         self.tf_map_col = tf_map_col
         self.model_training = model_training
 
-    def create_folds(self, history, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
+    def create_folds(self, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
@@ -356,14 +385,15 @@ class FoldValidator():
 
         :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
         citeulikePaperId_col, userId_col
+        :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
         :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
-        :param statistics_file_name TODO add
+        :param statistics_file_name name of the file in which statistics will be written
         :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test 
         and training data frame
         """
         # creates all splits
-        folds = FoldSplitter().split_into_folds(history, papers_mapping, timestamp_col, fold_period_in_months,
+        folds = FoldSplitter().split_into_folds(history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
                                                 self.paperId_col,
                                                 self.citeulikePaperId_col, self.userId_col)
         # store all folds
@@ -409,6 +439,15 @@ class FoldValidator():
         papers = spark.read.csv(Fold.get_papers_corpus_frame_path(fold_index, distributed), header=False,
                                 schema=paper_corpus_schema)
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+
+        # Load LDA model
+        # (name, dataType, nullable)
+        lda_papers_schema = StructType([StructField("paper_id", IntegerType(), False),
+                                        StructField("lda_vector", VectorUDT(), False)])
+        # load lda papers
+        papers_lda_vectors = spark.read.csv(Fold.get_lda_papers_frame_path(fold_index, distributed), header=False,
+                                schema=lda_papers_schema)
+        fold.ldaModel = LDAModel(papers_lda_vectors, paperId_col = "paper_id", output_col = "lda_vector");
         return fold
 
     def load_test_fold(self, spark, fold_index, distributed=True):
@@ -491,23 +530,10 @@ class FoldValidator():
             file.write("Loading the fold " + str(lf) + "\n")
             file.close()
 
-            print("Start training LDA ...")
-            # training TF IDF
-            trainingLDA = datetime.datetime.now()
-            # TODO revert topics only for testing
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold.papers_corpus, k_topics=5, maxIter=10, paperId_col=self.paperId_col, tf_map_col=self.tf_map_col, output_col="lda_vector")
-
-            print("LDA trained.")
-            tLDA = datetime.datetime.now() - trainingLDA
-            print("Fitting LDA...")
-            ldaModel = ldaVectorizer.fit(self.bag_of_words)
-            file = open("results/execution.txt", "a")
-            file.write("Fitting LDA:" + str(tLDA) + "\n")
-            file.close()
 
             # Training LTR
             ltrTraining = datetime.datetime.now()
-            ltr = LearningToRank(spark, fold.papers_corpus, ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+            ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
 
 

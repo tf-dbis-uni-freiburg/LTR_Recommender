@@ -56,12 +56,12 @@ bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
 # pairs_generation = get_pairs_generation(args.pairs_generation)
 # model_training = get_model_training(args.model_training)
-fold_validator = FoldValidator(bag_of_words, peer_papers_count=args.peers_count,
+fold_validator = FoldValidator(peer_papers_count=args.peers_count,
                                pairs_generation=args.pairs_generation,
                                paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                                userId_col="user_id", tf_map_col="term_occurrence",
                                model_training=args.model_training)
-#fold_validator.create_folds(history, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=6)
-fold_validator.evaluate_folds(spark)
+fold_validator.create_folds(history, bag_of_words, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=6)
+#fold_validator.evaluate_folds(spark)
 
 #fold_validator.create_folds(history, papers, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=1)
