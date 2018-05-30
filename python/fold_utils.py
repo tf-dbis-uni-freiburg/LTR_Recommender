@@ -480,7 +480,7 @@ class FoldValidator():
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
 
-            # print("Persisting the fold ...")
+            print("Persisting the fold ...")
             fold.training_data_frame.persist()
             fold.test_data_frame.persist()
             fold.papers_corpus.papers.persist()
@@ -530,8 +530,8 @@ class FoldValidator():
             file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
             file.close()
 
-            #print("Persist the predictions.")
-            #papers_corpus_with_predictions.persist()
+            # print("Persist the predictions.")
+            # papers_corpus_with_predictions.persist()
 
             # (paper_id | citeulike_paper_id | ranking_score)  OR (paper_id | citeulike_paper_id| user_id | ranking_score)
             # papers_corpus_with_predictions.show()
@@ -547,8 +547,8 @@ class FoldValidator():
             file.write("Evaluation:" + str(evalTime) + "\n")
             file.close()
 
-            # print("Unpersist the data")
-            # # papers_corpus_with_predictions.unpersist()
+            print("Unpersist the data")
+            # papers_corpus_with_predictions.unpersist()
             fold.training_data_frame.unpersist()
             fold.test_data_frame.unpersist()
             fold.papers_corpus.papers.unpersist()
@@ -821,7 +821,6 @@ class FoldEvaluator:
         line = line + "| " + str(fold_index)
         overall_evaluation_list = np.array(overall_evaluation.collect())[0]
         for metric_value in overall_evaluation_list:
-            print(metric_value)
             line = line + "| " + str(metric_value)
         file.write(line)
         file.close()
