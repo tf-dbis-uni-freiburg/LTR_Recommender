@@ -339,7 +339,7 @@ class LDAVectorizer(Estimator):
         :returns: a build model which can be used for transformation of a data set
         """
         tfVectorizer = TFVectorizer(self.papers_corpus, paperId_col = self.paperId_col, tf_map_col = self.tf_map_col, output_col = "tf_vector")
-        tfVectorizerModel = tfVectorizer.fit(dataset = papers)
+        tfVectorizerModel = tfVectorizer.fit(papers)
         # paper_id | tf_vector
         papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
         # Trains a LDA model.
@@ -396,8 +396,6 @@ class LDAModel(Transformer):
         :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
-        print("Transform in LDA. Data count:")
-        print(dataset.count())
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
 

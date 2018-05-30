@@ -1,4 +1,5 @@
 from _ast import In
+from pyexpat import model
 
 from pyspark.ml.base import Estimator
 from pyspark.mllib.classification import SVMWithSGD
@@ -93,6 +94,7 @@ class PeerPapersSampler(Transformer):
             while len(peers) < k:
                 candidate = randint(1, total_papers_count + 1)
                 # if a candidate paper is not in positives for an user and there exists paper with such id in the paper corpus
+                # and such paper is not already part of the peers
                 if candidate not in positives and candidate not in peers:
                     peers.add(candidate)
             return list(peers)
@@ -148,7 +150,7 @@ class PapersPairBuilder(Transformer):
     #     ONE_CLASS_PAIRS = 1
     #     EQUALLY_DISTRIBUTED_PAIRS = 2
 
-    def __init__(self, pairs_generation, paperId_col="paper_id", peer_paperId_col="peer_paper_id",
+    def __init__(self, pairs_generation, model_training, userId_col="user_id", paperId_col="paper_id", peer_paperId_col="peer_paper_id",
                  paper_vector_col="paper_vector", peer_paper_vector_col="peer_paper_vector",
                  output_col="pair_paper_difference", label_col="label"):
         """
@@ -161,7 +163,12 @@ class PapersPairBuilder(Transformer):
         (p_p - p, class: 0)
         2) ONE_CLASS_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1)
         3) EQUALLY_DISTRIBUTED_PAIRS - for 50% of papers in the set N, calculate p - p_p, class:1), 
-        and for the other 50% (p_p - p, class: 0)
+        and for the other 50% (p_p - p, class: 0). If we train a general model, distribution is based on paper.
+        If we train an individual model, distribution is based on pairs (user_id, paper). For the former, all peers for
+        a paper independently from user information are divided into 50/50.
+        For the latter, peer papers for a paper liked by a particular user are divided into 50/50.
+        :param model_training sm, smmu or mpu
+        :param userId_col name of the user id column in the input data frame
         :param paperId_col name of the column that contains paper id
         :param peer_paperId_col name of the column that contains peer paper id
         :param paper_vector_col name of the column that contains representation of the paper
@@ -170,7 +177,9 @@ class PapersPairBuilder(Transformer):
         :param label_col name of the column where the class of the pair/result is stored
         """
         self.pairs_generation = pairs_generation
+        self.model_training = model_training
         self.paperId_col = paperId_col
+        self.userId_col = userId_col
         self.peer_paperId_col = peer_paperId_col
         self.paper_vector_col = paper_vector_col
         self.peer_paper_vector_col = peer_paper_vector_col
@@ -179,6 +188,7 @@ class PapersPairBuilder(Transformer):
 
     def _transform(self, dataset):
 
+        # dataset format peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector |
         def diff(v1, v2):
             """
             Calculate the difference between two arrays.
@@ -210,36 +220,49 @@ class PapersPairBuilder(Transformer):
 
         if (self.pairs_generation == "edp" ): # self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
             # 50 % of the paper_pairs with label 1, 50% with label 0
-
-            # get a list of peer paper ids per paper
-            peers_per_paper = dataset.groupBy(self.paperId_col).agg(
-                F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
+            peers_per_paper = None
+            if(self.model_training == "sm"):
+                # get a list of peer paper ids per paper
+                dataset = dataset.select(self.paperId_col, self.peer_paperId_col, self.paper_vector_col, self.peer_paperId_col, self.peer_paper_vector_col).dropDuplicates()
+                peers_per_paper = dataset.select(self.paperId_col, self.peer_paperId_col).dropDuplicates()
+                peers_per_paper = peers_per_paper.groupBy(self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
+            else:
+                peers_per_paper = dataset.groupBy(self.userId_col, self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
 
             # generate 50/50 distribution to positive/negative class
             peers_per_paper = peers_per_paper.withColumn("equally_distributed_papers", split_papers_udf("peers_per_paper"))
-
             # positive label 1
-            positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers",
-                                                                  F.col("equally_distributed_papers")[0])
+            positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
 
-            positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
-                                                                       F.explode("positive_class_papers").alias(
-                                                                           self.peer_paperId_col))
-            positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+            if(self.model_training == "sm"):
+                positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
+                                                                           F.explode("positive_class_papers").alias(
+                                                                               self.peer_paperId_col))
+                positive_class_dataset = dataset.join(positive_class_per_paper,
+                                                      [self.paperId_col, self.peer_paperId_col])
+            else:
+                positive_class_per_paper = positive_class_per_paper.select(self.userId_col, self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
+                positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
 
-            # negative label 0
-            negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers",
-                                                                  F.col("equally_distributed_papers")[1])
-            negative_class_per_paper = negative_class_per_paper.select(self.paperId_col,
-                                                                       F.explode("negative_class_papers").alias(
-                                                                           self.peer_paperId_col))
 
-            negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+            # negative label 0
+            negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
+            if (self.model_training == "sm"):
+                negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(
+                                                                               self.peer_paperId_col))
+                negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+            else:
+                negative_class_per_paper = negative_class_per_paper.select(self.userId_col, self.paperId_col,
+                                                                           F.explode("negative_class_papers").alias(
+                                                                               self.peer_paperId_col))
+                negative_class_dataset = dataset.join(negative_class_per_paper,
+                                                      [self.userId_col, self.paperId_col, self.peer_paperId_col])
+
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf( self.peer_paper_vector_col, self.paper_vector_col))
             # add label 0
@@ -271,20 +294,6 @@ class PapersPairBuilder(Transformer):
 
         return dataset
 
-        # def diff_tf_idf(v1, v2):
-        #     """
-        #     Calculate the difference between two sparse vectors.
-        #
-        #     :return: sparse vector of their difference
-        #     """
-        #     values = defaultdict(float)  # Dictionary with default value 0.0
-        #     # Add values from v1
-        #     for i in range(v1.indices.size):
-        #         values[v1.indices[i]] += v1.values[i]
-        #     # subtract values from v2
-        #     for i in range(v2.indices.size):
-        #         values[v2.indices[i]] -= v2.values[i]
-        #     return Vectors.sparse(v1.size, dict(values))
 
 class LearningToRank(Estimator, Transformer):
     """
@@ -312,8 +321,9 @@ class LearningToRank(Estimator, Transformer):
         3.1) MODEL_PER_USER - Train one model per user. Number of models is equal to number of users. Each model will be trained only over papers that are 
     liked by particular user. 
 
-        3.2) SINGLE_MODEL_ALL_USERS = 1 - Train only one model based on all users. The model won't be so personalized, we will have more
+        3.2) SINGLE_MODEL_ALL_USERS  - Train only one model based on all users. The model won't be so personalized, we will have more
     general model. But the cost of training is less compared to MODEL_PER_USER.
+        3.3) TODO add for SMMU single model multiple users
 
     """
 
@@ -363,6 +373,7 @@ class LearningToRank(Estimator, Transformer):
 
         2) SINGLE_MODEL_ALL_USERS = 1 - Train only one model based on all users. The model won't be 
         so personalized, we will have more general model. But the cost of training is less compared to MODEL_PER_USER.
+        3) TODO add the third option
 
         :param peer_papers_count: Used in the first phase of the algorithm. It represents the number of peer papers that will 
         be sampled per paper
@@ -427,8 +438,8 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper ids used for training
         :return: a SVM model
         """
+
         print("Train a single model.")
-        print(dataset.count())
         # 1) Peer papers sampling
         nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
                                 userId_col=self.userId_col,
@@ -436,38 +447,29 @@ class LearningToRank(Estimator, Transformer):
         # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
 
-        print("peer generation...")
-        print(dataset.count())
-
         # add lda paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
-        print("Paper id LDA transform...")
-        print(dataset.count())
 
         # get in which columns the result of the transform is stored
         former_paper_output_column = self.paper_profiles_model.output_col
         former_papeId_column = self.paper_profiles_model.paperId_col
 
-        print("Peer paper LDA transform.")
         # add lda ids paper representation for peer papers
         self.paper_profiles_model.setPaperIdCol("peer_paper_id")
         self.paper_profiles_model.setOutputCol("peer_paper_lda_vector")
 
         # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
         dataset = self.paper_profiles_model.transform(dataset)
-        print(dataset.count())
 
-        print("Pair generation.")
         # 2) pair building
         # peer_paper_lda_vector, paper_lda_vector
-        papersPairBuilder = PapersPairBuilder(self.pairs_generation, paperId_col=self.paperId_col,
+        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training, self.userId_col, self.paperId_col,
                                               peer_paperId_col="peer_paper_id",
                                               paper_vector_col=former_paper_output_column,
                                               peer_paper_vector_col="peer_paper_lda_vector",
                                               output_col=self.features_col, label_col="label")
         # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
-        print(dataset.count())
 
         # drop lda vectors - not needed anymore
         dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
@@ -477,7 +479,7 @@ class LearningToRank(Estimator, Transformer):
             def createLabelPoint(line):
                 # label, features
                 # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
-                return LabeledPoint(line[5], line[4])
+                return LabeledPoint(line[-1], line[-2])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
@@ -485,7 +487,6 @@ class LearningToRank(Estimator, Transformer):
             lsvcModel = SVMWithSGD().train(labeled_data_points)
 
         elif (self.model_training == "smmu"):
-            print("Model training")
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
                 # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
