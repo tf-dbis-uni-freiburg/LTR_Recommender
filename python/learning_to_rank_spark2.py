@@ -1,6 +1,3 @@
-from _ast import In
-from pyexpat import model
-
 from pyspark.ml.base import Estimator
 from pyspark.mllib.classification import SVMWithSGD
 from pyspark.mllib.regression import LabeledPoint
