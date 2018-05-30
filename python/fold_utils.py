@@ -6,6 +6,7 @@ from pyspark.sql.types import *
 from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
+import numpy as np
 
 class Fold:
     """
@@ -479,7 +480,7 @@ class FoldValidator():
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
 
-            print("Persisting the fold ...")
+            # print("Persisting the fold ...")
             fold.training_data_frame.persist()
             fold.test_data_frame.persist()
             fold.papers_corpus.papers.persist()
@@ -533,7 +534,7 @@ class FoldValidator():
             #papers_corpus_with_predictions.persist()
 
             # (paper_id | citeulike_paper_id | ranking_score)  OR (paper_id | citeulike_paper_id| user_id | ranking_score)
-            papers_corpus_with_predictions.show()
+            # papers_corpus_with_predictions.show()
 
             # EVALUATION
             eval = datetime.datetime.now()
@@ -546,8 +547,8 @@ class FoldValidator():
             file.write("Evaluation:" + str(evalTime) + "\n")
             file.close()
 
-            print("Unpersist the data")
-            # papers_corpus_with_predictions.unpersist()
+            # print("Unpersist the data")
+            # # papers_corpus_with_predictions.unpersist()
             fold.training_data_frame.unpersist()
             fold.test_data_frame.unpersist()
             fold.papers_corpus.papers.unpersist()
@@ -611,7 +612,7 @@ class FoldEvaluator:
             # sort by prediction
             sorted_prediction_papers = sorted(total_predicted_papers, key=lambda tup: tup[1], reverse=True)
             training_paper_set = set(training_papers)
-            filtered_sorted_prediction_papers = [(x, float(y)) for x, y in sorted_prediction_papers if
+            filtered_sorted_prediction_papers = [(float(x), float(y)) for x, y in sorted_prediction_papers if
                                                  x not in training_paper_set]
             return filtered_sorted_prediction_papers[:k]
 
@@ -719,7 +720,6 @@ class FoldEvaluator:
 
         candidate_papers_per_user = None
         if(self.model_training == "sm"): #LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
-            print("Model training: sm")
             # take max top k + max_training_library size
             papers_corpus_with_predictions = papers_corpus_with_predictions.orderBy(score_col, ascending=False).limit(self.max_top_k + max_training_library)
 
@@ -734,7 +734,6 @@ class FoldEvaluator:
             # add the list of predictions to all selected predicted paper to each user
             candidate_papers_per_user = training_user_library.crossJoin(top_papers_predictions)
         elif(self.model_training == "mpu" or self.model_training == "smmu"): #LearningToRank.Model_Training.MODEL_PER_USER): # SINGLE_MODEL_MULTIPLE_USERS
-            print("Model training: smmu OR mpu")
             # order by score per user
             window = Window.partitionBy(userId_col).orderBy(F.col(score_col).desc())
 
@@ -783,25 +782,16 @@ class FoldEvaluator:
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("candidate_papers_set", "test_user_library")
         print("Store evaluation per user.")
-
         # store results per fold
         self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
 
         # store overall results
-        # drop user id column
+        # drop user id column, we do not need it
         evaluation_per_user = evaluation_per_user.drop(userId_col)
-        avg = evaluation_per_user.groupBy().agg(F.avg()).collect()
-        avg.show()
+        # take the average over each column
+        avg = evaluation_per_user.groupBy().avg()
+        self.append_fold_overall_result(fold.index, avg)
 
-        # evaluations = {}
-        # print("Store overall evaluations...")
-        # # compute avg over all columns
-        # for metric_column in evaluation_columns:
-        #     # remove NoNe values and then calculate the AVG
-        #     avg = evaluation_per_user.groupBy().agg(F.avg(metric_column)).collect()
-        #     evaluations[metric_column] = avg[0][0]
-        # self.append_fold_overall_result(fold.index, evaluations)
-        # evaluation_per_user.show()
         return evaluation_per_user
 
     def store_fold_results(self, fold_index, model_training, evaluations_per_user, distributed=True):
@@ -829,7 +819,9 @@ class FoldEvaluator:
         file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
-        for metric_name, metric_value in overall_evaluation.items():
+        overall_evaluation_list = np.array(overall_evaluation.collect())[0]
+        for metric_value in overall_evaluation_list:
+            print(metric_value)
             line = line + "| " + str(metric_value)
         file.write(line)
         file.close()
