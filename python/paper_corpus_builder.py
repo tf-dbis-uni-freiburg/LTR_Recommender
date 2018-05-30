@@ -1,12 +1,14 @@
 class PaperCorpusBuilder():
     """
+    TODO change comments
     Class responsible for building the paper corpus. It consists of all papers (their citeulike_paper_ids) that
     will be considered in the next stages of the algorithm. For example, when all terms in the corpus are extracted,
     only terms from papers part of the paper corpus will be taken into account.
     """
     @staticmethod
-    def buildCorpus(papers, papers_mapping, end_year, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id"):
+    def buildCorpus(fold_papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id"):
         """
+        TODO change comments
         Extract all papers which are published before a particular year. These papers are considered as paper corpus for
         all next stages of the algorithm. Each paper in the papers data frame is mapped by citeulike paper id. But this
         is the only data frame in the data set which use this type of id. Therefore, a mapping between citeulike paper ids
@@ -20,25 +22,19 @@ class PaperCorpusBuilder():
         :param papers_mapping data frame of mapping between paper_id and citeulike_paper_id
         :param paperId_col name of the paper id column in the papers_mapping dataframe
         :param citeulikePaperId_col name of the paper id column in the papers dataframe
-        :param end_year: all papers published before this date are selected 
         :return: data frame that contains paper ids from all papers in the corpus. It consists of 2 columns with names 
         same as paperId_col and citeulikePaperId_col
         """
+        # Filtering by year - not used anymore
         # filter all papers which have "year" equals to null
-        null_year_papers = papers.filter(papers.year.isNull())
-
+        # null_year_papers = papers.filter(papers.year.isNull())
         # filter by end_year
-        papers_corpus = papers.filter(papers.year <= end_year)
-
+        # papers_corpus = papers.filter(papers.year <= end_year)
         # add papers with null year
-        papers_corpus = papers_corpus.union(null_year_papers)
-
-        # drop all columns that won't be used anymore
-        papers_corpus = papers_corpus.select(citeulikePaperId_col)
+        # papers_corpus = papers_corpus.union(null_year_papers)
 
         # add paper_id to the corpus
-        papers_corpus = papers_corpus.join(papers_mapping, citeulikePaperId_col)
-        papers_corpus = PapersCorpus(papers_corpus, paperId_col, citeulikePaperId_col)
+        papers_corpus = PapersCorpus(fold_papers, paperId_col, citeulikePaperId_col)
         return papers_corpus
 
 class PapersCorpus:

@@ -139,10 +139,9 @@ class Loader:
             StructField("month", StringType(), True),
             StructField("postedat", StringType(), True),
             StructField("address", StringType(), True),
-            StructField("title", StringType(), True),
-            StructField("abstract", StringType(), True)
+            StructField("text", StringType(), True)
         ])
-        papers = self.spark.read.csv(self.path + filename, header=False, schema=papersSchema)
+        papers = self.spark.read.csv(self.path + filename, header=True, schema=papersSchema)
         return papers
 
     def load_history(self, filename):

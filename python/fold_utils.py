@@ -180,7 +180,7 @@ class FoldSplitter:
     When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    def split_into_folds(self, history, papers, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+    def split_into_folds(self, history, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
                          citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id"):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
@@ -218,6 +218,9 @@ class FoldSplitter:
         desc_data_frame = history.orderBy(timestamp_col, ascending=False)
         end_date = desc_data_frame.first()[2]
         fold_index = 1
+
+        # add paper id to the ratings
+        history = history.join(papers_mapping, citeulikePaperId_col)
         folds = []
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
@@ -227,8 +230,11 @@ class FoldSplitter:
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
-            # build the corpus for the fold, it includes all papers published til the end of the fold
-            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(papers, papers_mapping, fold_end_date.year , paperId_col, citeulikePaperId_col)
+            # build the corpus for the fold, it includes all papers part of the fold
+            fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col)\
+                .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
+
+            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
 
             fold.set_papers_corpus(fold_papers_corpus)
             # add the fold to the result list
@@ -344,7 +350,7 @@ class FoldValidator():
         self.tf_map_col = tf_map_col
         self.model_training = model_training
 
-    def create_folds(self, history, papers, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
+    def create_folds(self, history, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         papers data frame and papers mapping data frame. Each papers corpus contains all papers published before an end date
@@ -353,7 +359,6 @@ class FoldValidator():
 
         :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
         citeulikePaperId_col, userId_col
-        :param papers: data frame that contains all papers. Its used column is citeulikePaperId_col.
         :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
         :param statistics_file_name TODO add
         :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
@@ -361,7 +366,7 @@ class FoldValidator():
         and training data frame
         """
         # creates all splits
-        folds = FoldSplitter().split_into_folds(history, papers, papers_mapping, timestamp_col, fold_period_in_months,
+        folds = FoldSplitter().split_into_folds(history, papers_mapping, timestamp_col, fold_period_in_months,
                                                 self.paperId_col,
                                                 self.citeulikePaperId_col, self.userId_col)
         # store all folds
@@ -529,18 +534,18 @@ class FoldValidator():
             file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
             file.close()
 
-            #print("Persist the predictions.")
-            #papers_corpus_with_predictions.persist()
+            # print("Persist the predictions.")
+            # papers_corpus_with_predictions.persist()
 
             # (paper_id | citeulike_paper_id | ranking_score)  OR (paper_id | citeulike_paper_id| user_id | ranking_score)
-            papers_corpus_with_predictions.show()
+            # papers_corpus_with_predictions.show()
 
             # EVALUATION
             eval = datetime.datetime.now()
 
             print("Starting evaluations...")
             FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-             .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
+            .evaluate_fold(papers_corpus_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
             evalTime = datetime.datetime.now() - eval
             file = open("results/execution.txt", "a")
             file.write("Evaluation:" + str(evalTime) + "\n")

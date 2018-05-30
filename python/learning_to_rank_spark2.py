@@ -288,7 +288,6 @@ class PapersPairBuilder(Transformer):
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
-
         return dataset
 
 
