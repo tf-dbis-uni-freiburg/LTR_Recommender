@@ -503,123 +503,71 @@ class LearningToRank(Estimator, Transformer):
         print("Training LTRModel finished.")
         return lsvcModel
 
-    def _transform(self, papers_corpus):
+    def _transform(self, candidate_set):
         """
+        TODO change comments
         Add prediction to each paper in the input data set based on the trained model and its features vector.
 
         :param dataset: paper profiles
         :return: dataset with predictions - column "prediction"
         """
+        predictions = None
+        # format user_id, paper_id
+        candidate_set = candidate_set.select(self.userId_col, F.explode("candidate_set").alias(self.paperId_col))
+
+        # scheme for the final prediction result data frame
+        predictions_scheme = StructType([
+            #  name, dataType, nullable
+            StructField("user_id", StringType(), False),
+            StructField("paper_id", IntegerType(), False),
+            StructField("ranking_score", FloatType(), True)
+        ])
+
+        self.paper_profiles_model.setPaperIdCol(self.paperId_col)
+        self.paper_profiles_model.setOutputCol(self.features_col)
+
+        # add paper representation to each paper in the candidate set
+        # candidate set forma - user_id, paper_id
+        predictions = self.paper_profiles_model.transform(candidate_set)
+        # make predictions using the model over
+        predictions = MLUtils.convertVectorColumnsFromML(predictions, self.features_col)
+
         if (self.model_training == "mpu"): #self.Model_Training.MODEL_PER_USER):
-            papers_corpus_predictions = None
 
-            self.paper_profiles_model.setPaperIdCol(self.paperId_col)
-            self.paper_profiles_model.setOutputCol(self.features_col)
-            # add paper representation to each paper in the corpus
-            papers_corpus = self.paper_profiles_model.transform(papers_corpus)
-
+            print("Predicting mpu ...")
             for userId, model in self.models.items():
-                # TODO optimize by removing papers from the training set
-                # make predictions using the model over full papers corpus
-                papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
-
                 # set threshold to NONE to receive raw predictions from the model
                 model._threshold = None
-                user_papers_corpus_predictions_rdd = papers_corpus.rdd.map(
-                    lambda p: (p.paper_id, p.citeulike_paper_id, float(model.predict(p.features))))
 
-                # convert RDD to Data frame
-                # Load papers into DF
-                prediction_scheme = StructType([
-                    #  name, dataType, nullable
-                    StructField("paper_id", IntegerType(), False),
-                    StructField("citeulike_paper_id", StringType(), True),
-                    StructField("ranking_score", FloatType(), True)
-                ])
-                user_papers_corpus_predictions = user_papers_corpus_predictions_rdd.toDF(prediction_scheme)
+            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model[p.user_id].predict(p.features))))
 
-                # add user id to each row to distinguish which model was used for these predictions
-                user_id_df = self.spark.createDataFrame([(userId)], [self.userId_col])
-                user_papers_corpus_predictions = user_papers_corpus_predictions.crossJoin(user_id_df)
-
-                # add predictions for a user to the final set of predictions
-                if (papers_corpus_predictions == None):
-                    papers_corpus_predictions = user_papers_corpus_predictions
-                else:
-                    papers_corpus_predictions = papers_corpus_predictions.union(user_papers_corpus_predictions)
+            predictions = predictions_rdd.toDF(predictions_scheme)
 
         elif (self.model_training == "sm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+            print("Prediction sm ...")
+
             model = self.models[0]
-            self.paper_profiles_model.setPaperIdCol(self.paperId_col)
-            self.paper_profiles_model.setOutputCol(self.features_col)
-
-            # add paper representation to each paper in the corpus
-            papers_corpus = self.paper_profiles_model.transform(papers_corpus)
-
-            # make predictions using the model over full papers corpus
-            # TODO check if this conversion is still needed
-            papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
-
             # set threshold to NONE to receive raw predictions from the model
             model._threshold = None
-            papers_corpus_predictions = papers_corpus.rdd.map(lambda p: (p.paper_id, p.citeulike_paper_id, float(model.predict(p.features))))
-
-            # convert RDD to Data frame
-            # Load papers into DF
-            prediction_scheme = StructType([
-                #  name, dataType, nullable
-                StructField("paper_id", IntegerType(), False),
-                StructField("citeulike_paper_id", StringType(), True),
-                StructField("ranking_score", FloatType(), True)
-            ])
-            papers_corpus_predictions = papers_corpus_predictions.toDF(prediction_scheme)
+            predictions = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.features))))
+            predictions = predictions.toDF(predictions_scheme)
 
         elif (self.model_training == "smmu"):
             print("Predicting smmu...")
             model = self.models[0]
-
-            self.paper_profiles_model.setPaperIdCol(self.paperId_col)
-            self.paper_profiles_model.setOutputCol(self.features_col)
-            # add paper representation to each paper in the corpus
-            papers_corpus = self.paper_profiles_model.transform(papers_corpus)
-
-            # TODO optimize by removing papers from the training set
-            # make predictions using the model over full papers corpus
-            papers_corpus = MLUtils.convertVectorColumnsFromML(papers_corpus, self.features_col)
-
-            print(len(model.modelWeights))
-            userIds = []
-            for key in model.modelWeights:
-                keySt = str(key)
-                userIdRow = Row(user_id=keySt)
-                userIds.append(userIdRow)
-
-            print("Users:" + str(len(userIds)))
-
-            # add user id to each row to distinguish which model was used for these predictions
-            user_ids_df = self.spark.createDataFrame(userIds)
-            user_papers_corpus = papers_corpus.crossJoin(user_ids_df)
+            print(model)
+            print("How many users:"  + str(len(model.modelWeights)))
 
             # set threshold to NONE to receive raw predictions from the model
             model.threshold = None
-            user_papers_corpus_predictions_rdd = user_papers_corpus.rdd.map(lambda p: (
-                    p.paper_id, p.citeulike_paper_id, p.user_id, float(model.predict(p.user_id, p.features))))
-
-            print("Adding predictions")
-            # convert RDD to Data frame
-            prediction_scheme = StructType([
-                #  name, dataType, nullable
-                StructField("paper_id", IntegerType(), False),
-                StructField("citeulike_paper_id", StringType(), True),
-                StructField("user_id", StringType(), True),
-                StructField("ranking_score", FloatType(), True)
-            ])
-            papers_corpus_predictions = user_papers_corpus_predictions_rdd.toDF(prediction_scheme)
+            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.user_id, p.features))))
+            predictions = predictions_rdd.toDF(predictions_scheme)
 
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
         print("Prediction size:")
-        print(papers_corpus_predictions.count())
-        # paper_id | citeulike_paper_id| user_id | ranking_score|
-        return papers_corpus_predictions
+        print(predictions.count())
+        predictions.show()
+        # user_id | paper_id | ranking_score|
+        return predictions
