@@ -7,7 +7,6 @@ from pyspark.sql.types import *
 from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
-import numpy as np
 
 class Fold:
     """
@@ -344,8 +343,8 @@ class FoldSplitter:
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
 
-            # train LDA # TODO change only for testing
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=5,
+            # train LDA
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=150,
                                           paperId_col=paperId_col, tf_map_col=tf_map_col,
                                           output_col="lda_vector")
             ldaModel = ldaVectorizer.fit(bag_of_words)
@@ -362,8 +361,6 @@ class FoldSplitter:
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
-            # TODO remove return
-            return folds
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
