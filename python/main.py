@@ -17,7 +17,7 @@ parser.add_argument('-peers_count', type=int, default=2,
                     help='number of peer papers generated for a paper')
 parser.add_argument('-pairs_generation', type=str, default="edp",
                     help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
-parser.add_argument('-model_training', type=str, default="smmu",
+parser.add_argument('-model_training', type=str, default="sm",
                     help='Different training approaches for LTR. Possible options 1) model per user - mpu 2) single model for all users - sm 3) one model that contains different weight vectors for each user - smmu')
 args = parser.parse_args()
 
@@ -35,19 +35,20 @@ args = parser.parse_args()
 #     elif (model_generation == "mpu"):
 #         return LearningToRank.Model_Training.MODEL_PER_USER
 
-spark = SparkSession.builder.appName("LTRRecommender").config("spark.jars", "/home/polina/Desktop/LTR.jar").getOrCreate()
+spark = SparkSession.builder.appName("LTRRecommender").getOrCreate()
 
 loader = Loader(args.input, spark)
 
 # Only needed when folds are created
 # load papers
 # papers = loader.load_papers("papers_metadata.csv")
-#
-# # Loading of the (citeulike paper id - paper id) mapping
-# # format (citeulike_paper_id, paper_id)
+
+
+# Loading of the (citeulike paper id - paper id) mapping
+# format (citeulike_paper_id, paper_id)
 papers_mapping = loader.load_papers_mapping("citeulike_id_doc_id_map.csv")
 
-# # Loading history
+# Loading history
 history = loader.load_history("ratings.csv")
 
 # Loading bag of words for each paper
@@ -61,7 +62,5 @@ fold_validator = FoldValidator(peer_papers_count=args.peers_count,
                                paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                                userId_col="user_id", tf_map_col="term_occurrence",
                                model_training=args.model_training)
-fold_validator.create_folds(history, bag_of_words, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=6)
+fold_validator.create_folds(spark, history, bag_of_words, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=6)
 #fold_validator.evaluate_folds(spark)
-
-#fold_validator.create_folds(history, papers, papers_mapping, "new-dataset-folds-statistics.txt", timestamp_col="timestamp", fold_period_in_months=1)

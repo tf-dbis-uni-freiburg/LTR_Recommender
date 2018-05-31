@@ -1,6 +1,7 @@
 from pyspark.sql import functions as F
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
+from random import shuffle
 from learning_to_rank_spark2 import *
 from pyspark.sql.types import *
 from dateutil.relativedelta import relativedelta
@@ -26,7 +27,9 @@ class Fold:
     """ Name of the file in which papers corpus of the fold is stored. """
     PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
     """ Name of the file in which LDA data frame of the fold is stored. """
-    LDA_DF_CSV_FILENAME = "lda-papers.csv"
+    LDA_DF_CSV_FILENAME = "lda-papers.parquet"
+    """ Name of the file in which candicate set data frame of the fold is stored. """
+    CANDIDATE_DF_CSV_FILENAME = "candidate-set.csv"
     """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.csv"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
@@ -45,6 +48,8 @@ class Fold:
         self.papers_corpus = None
         self.folder_path = None
         self.ldaModel = None
+        # user_id, list of candidate papers
+        self.candidate_set = None
 
     def set_index(self, index):
         self.index = index
@@ -66,8 +71,8 @@ class Fold:
 
     def store_distributed(self):
         """
-        For a fold, store its test data frame, training data frame, its papers corpus and lda profiles for all
-        paper in its paper corpus.
+        For a fold, store its test data frame, training data frame, its papers corpus, lda profiles for all
+        paper in its paper corpus and candidate set of papers for each user in the test set.
         All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
         of a fold. For example, for a fold with index 2, the stored information for it will be in
         "distributed-fold-2" folder.
@@ -79,12 +84,17 @@ class Fold:
         # save paper corpus
         self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index))
         # save lda paper profiles
-        self.ldaModel.paper_profiles.write.csv(Fold.get_lda_papers_frame_path(self.index))
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        self.ldaModel.paper_profiles.write.parquet(Fold.get_lda_papers_frame_path(self.index))
+        # save candidate set for each paper in the test set
+        # format - user_id, [candidate_set]
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        self.candidate_set.write.parquet(Fold.get_candidate_set_data_frame_path(self.index))
 
     def store(self):
         """
-        For a fold, store its test data frame, training data frame, its papers corpus and lda profiles for all
-        paper in its paper corpus.
+        For a fold, store its test data frame, training data frame, its papers corpus, lda profiles for all
+        paper in its paper corpus and candidate set of papers for each user in the test set.
         Each data frame will be stored in a single csv file.
         All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
         of a fold. For example, for a fold with index 2, the stored information for it will be in
@@ -97,7 +107,12 @@ class Fold:
         # save paper corpus
         self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
         # save lda paper profiles
-        self.ldaModel.paper_profiles.coalesce(1).write.csv(Fold.get_lda_papers_frame_path(self.index, distributed=False))
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        self.ldaModel.paper_profiles.coalesce(1).write.parquet(Fold.get_lda_papers_frame_path(self.index, distributed=False))
+        # save candidate set for each paper in the test set
+        # format - user_id, [candidate_set]
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        self.candidate_set.coalesce(1).write.parquet( Fold.get_candidate_set_data_frame_path(self.index, distributed=False))
 
 
     @staticmethod
@@ -149,6 +164,22 @@ class Fold:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.PAPER_CORPUS_DF_CSV_FILENAME
 
     @staticmethod
+    def get_candidate_set_data_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where candidate set data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it.
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if (distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_CSV_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_CSV_FILENAME
+
+    @staticmethod
     def get_evaluation_results_frame_path(fold_index, model_training, distributed=True):
         """
         Get the path to the file/folder where evaluation results for each user were stored. For the identification of a fold
@@ -196,13 +227,67 @@ class Fold:
         else:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_CSV_FILENAME
 
+class FoldCandidateSetGenerator:
+    """
+    For each user part of the test set generates a number of papers (18 000) that will be its candidate set. A prediction model that is trained
+    will be used to predict a score for each of these papers. A candidate set for a user contains 18 000 paper ids (or less for fold 1).
+    Random 18 000 papers are selected from [{paper_corpus} - {{test_library} + {training_library}}] where test_library and training_library are papers for a 
+    particular user part of its test set and training set, correspondingly. After the candidate set is selected, test library is added to it. This way
+    we guarantee that predictions for all papers in the test set will be included in the evaluation phase.
+    Format of the candidate set - user_id, candidate_set, where candidate_set is a list of paper ids.
+    """
+
+    def __init__(self, spark, paper_corpus, training_data_frame, test_data_frame, userId_col = "user_id", paperId_col = "paper_id", citeulikePaperId_col="citeulike_paper_id"):
+        self.spark = spark
+        self.training_data_frame = training_data_frame
+        self.test_data_frame = test_data_frame
+        self.paper_corpus = paper_corpus
+        self.userId_col = userId_col
+        self.paperId_col = paperId_col
+        self.citeulikePaperId_col = citeulikePaperId_col
+
+    def generate_candidate_set(self):
+
+        # take all papers that are part of the corpus
+        paper_corpus_list = self.paper_corpus.papers.groupBy().agg(F.collect_list(self.paperId_col).alias("paper_corpus")).collect()[0][0]
+
+        # broadcast all the papers in the corpus
+        paper_corpus_list_br = self.spark.sparkContext.broadcast(set(paper_corpus_list))
+
+        def get_candidate_set_per_user(training_library, test_library, k):
+            paper_corpus_set = paper_corpus_list_br.value
+            training_library_set = set(training_library)
+            test_library_set = set(test_library)
+            limited_corpus_set = paper_corpus_set - training_library_set - test_library_set
+            limited_corpus = list(limited_corpus_set)
+            shuffle(limited_corpus)
+            candidate_set = limited_corpus[:k] + test_library
+            return candidate_set
+
+        get_candidate_set_per_user_udf = F.udf(get_candidate_set_per_user, ArrayType(IntegerType()))
+
+        training_user_library = self.training_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("training_user_library"))
+        test_user_library = self.test_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.paperId_col).alias("test_user_library"))
+
+
+        # add training library to each user
+        # user_id|   test_user_library | training_user_library
+        test_training_user_library = test_user_library.join(training_user_library, self.userId_col)
+
+        k = 18000
+        candidate_set = test_training_user_library.withColumn("candidate_set", get_candidate_set_per_user_udf("training_user_library",
+                                                                                           "test_user_library",
+                                                                                           F.lit(k)))
+        candidate_set = candidate_set.select(self.userId_col, "candidate_set")
+        return candidate_set
+
 class FoldSplitter:
     """
     Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
     When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    def split_into_folds(self, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+    def split_into_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
                          citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
@@ -259,18 +344,26 @@ class FoldSplitter:
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
 
-            # train LDA
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=150,
+            # train LDA # TODO change only for testing
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=5,
                                           paperId_col=paperId_col, tf_map_col=tf_map_col,
                                           output_col="lda_vector")
             ldaModel = ldaVectorizer.fit(bag_of_words)
-
             fold.ldaModel = ldaModel
+
+            # Generate candidate set for each user in the test set
+            candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame, fold.test_data_frame,
+                                                           userId_col, paperId_col, citeulikePaperId_col)
+            candidate_set = candidateGenerator.generate_candidate_set()
+            fold.candidate_set = candidate_set
+
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
+            # TODO remove return
+            return folds
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
@@ -377,7 +470,7 @@ class FoldValidator():
         self.tf_map_col = tf_map_col
         self.model_training = model_training
 
-    def create_folds(self, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
+    def create_folds(self, spark, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
@@ -393,13 +486,14 @@ class FoldValidator():
         and training data frame
         """
         # creates all splits
-        folds = FoldSplitter().split_into_folds(history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
+        folds = FoldSplitter().split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
                                                 self.paperId_col,
                                                 self.citeulikePaperId_col, self.userId_col)
         # store all folds
         FoldsUtils.store_folds(folds)
         # compute statistics for each fold and store it
-        FoldsUtils.write_fold_statistics(folds, statistics_file_name)
+        # TODO uncomment it
+        # FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
         """
@@ -441,13 +535,13 @@ class FoldValidator():
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
 
         # Load LDA model
-        # (name, dataType, nullable)
-        lda_papers_schema = StructType([StructField("paper_id", IntegerType(), False),
-                                        StructField("lda_vector", VectorUDT(), False)])
         # load lda papers
-        papers_lda_vectors = spark.read.csv(Fold.get_lda_papers_frame_path(fold_index, distributed), header=False,
-                                schema=lda_papers_schema)
+        papers_lda_vectors = spark.read.parquet(Fold.get_lda_papers_frame_path(fold_index, distributed))
         fold.ldaModel = LDAModel(papers_lda_vectors, paperId_col = "paper_id", output_col = "lda_vector");
+
+        # Load Candidate Set
+        candidate_set = spark.read.parquet(Fold.get_candidate_set_data_frame_path(fold_index, distributed))
+        fold.candidate_set = candidate_set
         return fold
 
     def load_test_fold(self, spark, fold_index, distributed=True):
@@ -529,7 +623,6 @@ class FoldValidator():
             file = open("results/execution.txt", "a")
             file.write("Loading the fold " + str(lf) + "\n")
             file.close()
-
 
             # Training LTR
             ltrTraining = datetime.datetime.now()
@@ -846,7 +939,7 @@ class FoldEvaluator:
         file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
-        overall_evaluation_list = np.array(overall_evaluation.collect())[0]
+        overall_evaluation_list = overall_evaluation.collect()[0][0]
         for metric_value in overall_evaluation_list:
             line = line + "| " + str(metric_value)
         file.write(line)
