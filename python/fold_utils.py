@@ -588,7 +588,7 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         print("Evaluate folds...")
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
@@ -638,7 +638,7 @@ class FoldValidator():
 
             # PREDICTION by LTR
             ltrPrediction = datetime.datetime.now()
-            print("Transforming the paper corpus by using the model")
+            print("Transforming the candidate papers by using the model.")
             candidate_papers_with_predictions = ltr.transform(fold.candidate_set)
 
             ltrPr = datetime.datetime.now() - ltrPrediction
@@ -683,10 +683,14 @@ class FoldEvaluator:
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
         self.model_training = model_training
+        print(k_mrr)
+        print(k_ndcg)
+        print(k_recall)
         self.max_top_k =  max((k_mrr + k_ndcg + k_recall))
 
+        print(self.max_top_k)
         # write a file for all folds, it contains a row per fold
-        file = open( "results/"+ self.RESULTS_CSV_FILENAME, "a")
+        file = open( "results/" + self.model_training + "-" + self.RESULTS_CSV_FILENAME, "a")
         header_line = "fold_index |"
         for k in k_mrr:
             header_line = header_line + " MRR@" + str(k) + " |"
@@ -737,7 +741,7 @@ class FoldEvaluator:
             index = 1
             for i, prediction in sorted_prediction_papers:
                 if (int(i) in test_papers_set):
-                    return 1 / index
+                    return float(1) / float(index)
                 index += 1
             return 0.0
 
@@ -766,7 +770,7 @@ class FoldEvaluator:
             if(len(hits) == 0):
                 return 0.0
             else:
-                return len(hits) / len(test_papers)
+                return float(len(hits)) / float(len(test_papers))
 
         def ndcg_per_user(predicted_papers, test_papers, k):
             """
@@ -799,10 +803,9 @@ class FoldEvaluator:
                 # if there is a hit
                 if (int(paper_id) in test_papers_set):
                     dcg += 1 / (math.log((position + 1), 2))
-
                 idcg += 1 / (math.log((position + 1), 2))
                 position += 1
-            return dcg / idcg
+            return float(dcg) / float(idcg)
 
         mrr_per_user_udf = F.udf(mrr_per_user, DoubleType())
         ndcg_per_user_udf = F.udf(ndcg_per_user, DoubleType())
@@ -822,6 +825,8 @@ class FoldEvaluator:
         # user_id | test_user_library | candidate_papers_set |
         evaluation_per_user = test_user_library.join(candidate_papers_per_user, userId_col)
 
+        evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
+        evaluation_per_user.show()
         print("Adding evaluation...")
         evaluation_columns = []
         # add mrr
@@ -879,7 +884,7 @@ class FoldEvaluator:
         :return: 
         """
         # write a file for each fold, it contains a row per user
-        file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
+        file = open("results/" + self.model_training + "-" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
         overall_evaluation_list = np.array(overall_evaluation.collect())[0]
