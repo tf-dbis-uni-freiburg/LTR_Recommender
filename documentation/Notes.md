@@ -50,3 +50,4 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  - number of ratings in the training set 10333
  - After filtering for IMS and IMP, ratings in the training set left 8 127?
  - GM, prediction size: 1 966 105
+ - Evaluation of GM took 1.3h
