@@ -47,11 +47,6 @@ In total 5 folds: Data in period [2004-11-04, 2007-12-31].
  > Statistics for the folds can be found in new-dataset-folds-statistics.txt file.
  
  #### Fold 1
- - paper corpus for fold 1: 159 453 papers
  - number of ratings in the training set 10333
- - After filtering for SMMU and MPU, ratings in the training set left 8 127
- - After LDA transformation for both paper and its peer pair, ratings leftn 8 093
- - After Pair Generation:
- -- if edp (equally distributed pairs) - 8131 examples
- -- if dp (duplicated pairs) - 16 186 examples
- -- if ocp (one class pair) - 8093 examples
+ - After filtering for IMS and IMP, ratings in the training set left 8 127?
+ - GM, prediction size: 1 966 105
