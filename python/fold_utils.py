@@ -362,7 +362,6 @@ class FoldSplitter:
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
-            return folds
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
@@ -490,7 +489,7 @@ class FoldValidator():
         # store all folds
         FoldsUtils.store_folds(folds)
         # compute statistics for each fold and store it
-        # FoldsUtils.write_fold_statistics(folds, statistics_file_name)
+        FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
         """
