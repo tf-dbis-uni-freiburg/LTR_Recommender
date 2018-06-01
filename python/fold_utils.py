@@ -7,6 +7,7 @@ from pyspark.sql.types import *
 from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
+import numpy as np
 
 class Fold:
     """
@@ -361,6 +362,7 @@ class FoldSplitter:
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
+            return folds
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
@@ -441,10 +443,8 @@ class FoldValidator():
     """ Total number of folds. """
     NUMBER_OF_FOLD = 5;
 
-    # PapersPairBuilder.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS
-    # LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS
     def __init__(self, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "sm"):
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm"):
         """
         Construct FoldValidator object.
 
@@ -456,7 +456,8 @@ class FoldValidator():
         :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper.
-        :param model_training: MODEL_PER_USER or SINGLE_MODEL_ALL_USERS. See Model_Training enum
+        :param model_training: gm (general model), imp (individual model parallel version), ims (individual model sequential version)
+        See Model_Training enum
         """
         self.paperId_col = paperId_col
         self.userId_col = userId_col
@@ -489,7 +490,6 @@ class FoldValidator():
         # store all folds
         FoldsUtils.store_folds(folds)
         # compute statistics for each fold and store it
-        # TODO uncomment it
         # FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
@@ -605,9 +605,9 @@ class FoldValidator():
             # citeulike_paper_id | user_id | paper_id|
             fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
 
-            # if PMU or SMMPU, removes from training data frame those users which do not appear in the test set, no need
+            # if IMP or IMS, removes from training data frame those users which do not appear in the test set, no need
             # a model for them to be trained
-            if (self.model_training == "mpu" or self.model_training == "smmu"):
+            if (self.model_training == "imp" or self.model_training == "ims"):
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
 
@@ -679,7 +679,7 @@ class FoldEvaluator:
     """ Name of the file in which results for a fold are written. """
     RESULTS_CSV_FILENAME = "evaluation-results.txt"
 
-    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "sm"): #LearningToRank.Model_Training.SINGLE_MODEL_ALL_USERS):
+    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm"):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
@@ -883,7 +883,7 @@ class FoldEvaluator:
         file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
-        overall_evaluation_list = overall_evaluation.collect()[0]
+        overall_evaluation_list = np.array(overall_evaluation.collect())[0]
         for metric_value in overall_evaluation_list:
             line = line + "| " + str(metric_value)
         file.write(line)

@@ -218,7 +218,7 @@ class PapersPairBuilder(Transformer):
         if (self.pairs_generation == "edp" ): # self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
             # 50 % of the paper_pairs with label 1, 50% with label 0
             peers_per_paper = None
-            if(self.model_training == "sm"):
+            if(self.model_training == "gm"):
                 # get a list of peer paper ids per paper
                 dataset = dataset.select(self.paperId_col, self.peer_paperId_col, self.paper_vector_col, self.peer_paperId_col, self.peer_paper_vector_col).dropDuplicates()
                 peers_per_paper = dataset.select(self.paperId_col, self.peer_paperId_col).dropDuplicates()
@@ -231,7 +231,7 @@ class PapersPairBuilder(Transformer):
             # positive label 1
             positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
 
-            if(self.model_training == "sm"):
+            if(self.model_training == "gm"):
                 positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
                                                                            F.explode("positive_class_papers").alias(
                                                                                self.peer_paperId_col))
@@ -249,7 +249,7 @@ class PapersPairBuilder(Transformer):
 
             # negative label 0
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
-            if (self.model_training == "sm"):
+            if (self.model_training == "gm"):
                 negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(
                                                                                self.peer_paperId_col))
                 negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
@@ -314,12 +314,12 @@ class LearningToRank(Estimator, Transformer):
     of SVM (Support Vector Machines) is supported. When the model(s) is/are trained it can be used for predictions.
     There are two possibilities for model training:
 
-        3.1) MODEL_PER_USER - Train one model per user. Number of models is equal to number of users. Each model will be trained only over papers that are 
+        3.1) GENERAL_MODEL (gm) - Train one model per user. Number of models is equal to number of users. Each model will be trained only over papers that are
     liked by particular user. 
 
-        3.2) SINGLE_MODEL_ALL_USERS  - Train only one model based on all users. The model won't be so personalized, we will have more
-    general model. But the cost of training is less compared to MODEL_PER_USER.
-        3.3) TODO add for SMMU single model multiple users
+        3.2) INDIVIDUAL MODEL SEQUENTIAL (ims) - Train only one model based on all users. The model won't be so personalized, we will have more
+    general model. But the cost of training is less compared to GENERAL_MODEL.
+        3.3) INDIVIDUAL MODEL PARALLEL (imp)
 
     """
 
