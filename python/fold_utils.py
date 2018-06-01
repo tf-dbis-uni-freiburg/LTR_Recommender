@@ -589,7 +589,7 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         print("Evaluate folds...")
-        for i in range(1, 2): # FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
@@ -829,19 +829,19 @@ class FoldEvaluator:
         for k in self.k_mrr:
             column_name = "mrr@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, mrr_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, mrr_per_user_udf("predictions", "test_user_library", F.lit(k)))
 
         # add recall
         for k in self.k_recall:
             column_name = "recall@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, recall_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, recall_per_user_udf("predictions", "test_user_library", F.lit(k)))
 
         # add ndcg
         for k in self.k_ndcg:
             column_name = "NDCG@" + str(k)
             evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("candidate_papers_set", "test_user_library", F.lit(k)))
+            evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("predictions", "test_user_library", F.lit(k)))
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
         print("Store evaluation per user.")
@@ -883,7 +883,7 @@ class FoldEvaluator:
         file = open("results/" + self.RESULTS_CSV_FILENAME, "a")
         line = ""
         line = line + "| " + str(fold_index)
-        overall_evaluation_list = overall_evaluation.collect()[0][0]
+        overall_evaluation_list = overall_evaluation.collect()[0]
         for metric_value in overall_evaluation_list:
             line = line + "| " + str(metric_value)
         file.write(line)
