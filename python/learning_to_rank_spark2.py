@@ -129,7 +129,7 @@ class PapersPairBuilder(Transformer):
     As well as (p_p - p) with class 0.
     2) ONE_CLASS_PAIRS - only the difference between (p - p_p) will be computed and added with class 1.
     3) EQUALLY_DISTRIBUTED_PAIRS - because each paper p has a set of corresponding peer papers, for 50% of them (p - p_p) will 
-    be computed and added wirh class 1. And for the other 50%, (p_p - p) with class 0.
+    be computed and added with class 1. And for the other 50%, (p_p - p) with class 0.
     """
 
     # class Pairs_Generation(Enum):
@@ -239,7 +239,10 @@ class PapersPairBuilder(Transformer):
                                                       [self.paperId_col, self.peer_paperId_col])
             else:
                 positive_class_per_paper = positive_class_per_paper.select(self.userId_col, self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
-                positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
+                if(self.model_training == "imp"):
+                    positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
+                else:
+                    positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
@@ -254,11 +257,16 @@ class PapersPairBuilder(Transformer):
                                                                                self.peer_paperId_col))
                 negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
             else:
+
                 negative_class_per_paper = negative_class_per_paper.select(self.userId_col, self.paperId_col,
                                                                            F.explode("negative_class_papers").alias(
                                                                                self.peer_paperId_col))
-                negative_class_dataset = dataset.join(negative_class_per_paper,
-                                                      [self.userId_col, self.paperId_col, self.peer_paperId_col])
+                if (self.model_training == "imp"):
+                    negative_class_dataset = dataset.join(negative_class_per_paper,
+                                                          [self.userId_col, self.paperId_col, self.peer_paperId_col])
+                else:
+                    negative_class_dataset = dataset.join(negative_class_per_paper,
+                                                          [self.paperId_col, self.peer_paperId_col])
 
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf( self.peer_paper_vector_col, self.paper_vector_col))
@@ -330,15 +338,15 @@ class LearningToRank(Estimator, Transformer):
     #
     #     """ Train one model per user. Number of models is equal to number of users.
     #     Each model will be trained only over papers that are liked by particular user. """
-    #     MODEL_PER_USER = 0
+    #     GENERAL_MODEL = 0
     #
     #     """
     #     Train only one model based on all users. The model won't be so personalized, we will have more
-    #     general model. But the cost of training is less compared to MODEL_PER_USER.
+    #     general model. But the cost of training is less compared to GENERAL_MODEL.
     #     """
-    #     SINGLE_MODEL_ALL_USERS = 1
+    #     INDIVIDUAL MODEL SEQUENTIAL = 1
 
-    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training= "sm",
+    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training= "gm",
                  pairs_generation= "edp" , peer_papers_count=10,
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
@@ -364,12 +372,12 @@ class LearningToRank(Estimator, Transformer):
         and for the other 50% (p_p - p, class: 0)
 
         :param model_training: 
-        1) MODEL_PER_USER - Train one model per user. Number of models is equal to number of users.
+        1) GENERAL_MODEL - Train one model per user. Number of models is equal to number of users.
         Each model will be trained only over papers that are liked by particular user. 
 
-        2) SINGLE_MODEL_ALL_USERS = 1 - Train only one model based on all users. The model won't be 
+        2) INDIVIDUAL MODEL SEQUENTIAL = 1 - Train only one model based on all users. The model won't be
         so personalized, we will have more general model. But the cost of training is less compared to MODEL_PER_USER.
-        3) TODO add the third option
+        3) INDIVIDUAL MODEL PARALLEL
 
         :param peer_papers_count: Used in the first phase of the algorithm. It represents the number of peer papers that will 
         be sampled per paper
@@ -399,7 +407,7 @@ class LearningToRank(Estimator, Transformer):
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
         # train multiple models, one for each user in the data set
-        if (self.model_training == "mpu"): #self.Model_Training.MODEL_PER_USER):
+        if (self.model_training == "ims"):
             # extract all distinct users
             distinct_user_ids = dataset.select(self.userId_col).distinct().collect()
             # train a model for each user, simply by for loop over all users
@@ -413,11 +421,11 @@ class LearningToRank(Estimator, Transformer):
                 self.models[userId] = user_lsvcModel
             return self.models
         # Fit the model over full dataset and produce only one model for all users
-        elif (self.model_training == "sm"): # self.Model_Training.SINGLE_MODEL_ALL_USERS):
+        elif (self.model_training == "gm"):
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
             return self.models
-        elif (self.model_training == "smmu"):# self.Model_Training.SINGLE_MODEL_MULTIPLE_USERS):
+        elif (self.model_training == "imp"):
             # Fit the model over full data set and produce only one model,
             # it contains a map, which has an entry for each user
             lsvcModel = self.train_single_SVM_model(dataset)
@@ -470,7 +478,7 @@ class LearningToRank(Estimator, Transformer):
         # drop lda vectors - not needed anymore
         dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
         lsvcModel = None
-        if (self.model_training == "mpu" or self.model_training == "sm"):
+        if (self.model_training == "ims" or self.model_training == "gm"):
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
@@ -482,12 +490,12 @@ class LearningToRank(Estimator, Transformer):
             # Build the model
             lsvcModel = SVMWithSGD().train(labeled_data_points)
 
-        elif (self.model_training == "smmu"):
+        elif (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
-                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
+                # user_id | paper_id | peer_paper_id | citeulike_paper_id | features | label
                 # userId, label, features
-                return UserLabeledPoint(int(line[2]), line[5], line[4])
+                return UserLabeledPoint(int(line[0]), line[5], line[4])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
@@ -532,7 +540,7 @@ class LearningToRank(Estimator, Transformer):
         # make predictions using the model over
         predictions = MLUtils.convertVectorColumnsFromML(predictions, self.features_col)
 
-        if (self.model_training == "mpu"): #self.Model_Training.MODEL_PER_USER):
+        if (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
 
             print("Predicting mpu ...")
             for userId, model in self.models.items():
@@ -543,7 +551,7 @@ class LearningToRank(Estimator, Transformer):
 
             predictions = predictions_rdd.toDF(predictions_scheme)
 
-        elif (self.model_training == "sm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+        elif (self.model_training == "gm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
             print("Prediction sm ...")
 
             model = self.models[0]
@@ -552,11 +560,9 @@ class LearningToRank(Estimator, Transformer):
             predictions = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.features))))
             predictions = predictions.toDF(predictions_scheme)
 
-        elif (self.model_training == "smmu"):
+        elif (self.model_training == "imp"):
             print("Predicting smmu...")
             model = self.models[0]
-            print(model)
-            print("How many users:"  + str(len(model.modelWeights)))
 
             # set threshold to NONE to receive raw predictions from the model
             model.threshold = None
@@ -566,8 +572,5 @@ class LearningToRank(Estimator, Transformer):
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
-        print("Prediction size:")
-        print(predictions.count())
-        predictions.show()
         # user_id | paper_id | ranking_score|
         return predictions

@@ -588,7 +588,7 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         print("Evaluate folds...")
-        for i in range(1, 2): #FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
@@ -614,6 +614,8 @@ class FoldValidator():
             fold.training_data_frame.persist()
             fold.test_data_frame.persist()
             fold.papers_corpus.papers.persist()
+            fold.ldaModel.paper_profiles.persist()
+            fold.candidate_set.persist()
 
             lf = datetime.datetime.now() - loadingTheFold
             file = open("results/execution.txt", "a")
@@ -641,21 +643,18 @@ class FoldValidator():
             print("Transforming the candidate papers by using the model.")
             candidate_papers_with_predictions = ltr.transform(fold.candidate_set)
 
+            candidate_papers_with_predictions.persist()
+
             ltrPr = datetime.datetime.now() - ltrPrediction
             file = open("results/execution.txt", "a")
             file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
             file.close()
 
-            # print("Persist the predictions.")
-            # papers_corpus_with_predictions.persist()
-
-            # (paper_id | citeulike_paper_id | ranking_score)  OR (paper_id | citeulike_paper_id| user_id | ranking_score)
-            # papers_corpus_with_predictions.show()
-
             # EVALUATION
             eval = datetime.datetime.now()
 
             print("Starting evaluations...")
+
             FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
             .evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
             evalTime = datetime.datetime.now() - eval
@@ -664,10 +663,12 @@ class FoldValidator():
             file.close()
 
             print("Unpersist the data")
-            # papers_corpus_with_predictions.unpersist()
+            candidate_papers_with_predictions.unpersist()
             fold.training_data_frame.unpersist()
             fold.test_data_frame.unpersist()
             fold.papers_corpus.papers.unpersist()
+            fold.ldaModel.paper_profiles.unpersist()
+            fold.candidate_set.unpersist()
 
 
 class FoldEvaluator:
@@ -821,9 +822,9 @@ class FoldEvaluator:
         # user_id | test_user_library | candidate_papers_set |
         evaluation_per_user = test_user_library.join(candidate_papers_per_user, userId_col)
 
-        #evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
+        # test for a user with id 626
+        # evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
 
-        evaluation_per_user.show()
         print("Adding evaluation...")
         evaluation_columns = []
         # add mrr
@@ -843,10 +844,12 @@ class FoldEvaluator:
             column_name = "NDCG@" + str(k)
             evaluation_columns.append(column_name)
             evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("predictions", "test_user_library", F.lit(k)))
+
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
         print("Store evaluation per user.")
 
+        evaluation_per_user.persist()
         # store results per fold
         self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
 
@@ -857,6 +860,7 @@ class FoldEvaluator:
         avg = evaluation_per_user.groupBy().avg()
         self.append_fold_overall_result(fold.index, avg)
 
+        evaluation_per_user.unpersist()
         return evaluation_per_user
 
     def store_fold_results(self, fold_index, model_training, evaluations_per_user, distributed=True):
