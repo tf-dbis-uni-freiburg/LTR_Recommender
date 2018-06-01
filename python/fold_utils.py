@@ -683,12 +683,8 @@ class FoldEvaluator:
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
         self.model_training = model_training
-        print(k_mrr)
-        print(k_ndcg)
-        print(k_recall)
         self.max_top_k =  max((k_mrr + k_ndcg + k_recall))
 
-        print(self.max_top_k)
         # write a file for all folds, it contains a row per fold
         file = open( "results/" + self.model_training + "-" + self.RESULTS_CSV_FILENAME, "a")
         header_line = "fold_index |"
@@ -825,7 +821,8 @@ class FoldEvaluator:
         # user_id | test_user_library | candidate_papers_set |
         evaluation_per_user = test_user_library.join(candidate_papers_per_user, userId_col)
 
-        evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
+        #evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
+
         evaluation_per_user.show()
         print("Adding evaluation...")
         evaluation_columns = []
