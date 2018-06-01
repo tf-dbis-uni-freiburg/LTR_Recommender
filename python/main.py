@@ -17,7 +17,7 @@ parser.add_argument('-peers_count', type=int, default=2,
                     help='number of peer papers generated for a paper')
 parser.add_argument('-pairs_generation', type=str, default="edp",
                     help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
-parser.add_argument('-model_training', type=str, default="sm",
+parser.add_argument('-model_training', type=str, default="gm",
                     help='Different training approaches for LTR. Possible options 1) general model - gm 2) individual model parallel version - imp 3) individual model squential version - ims')
 args = parser.parse_args()
 
