@@ -56,11 +56,11 @@ class LTRSVMModel():
         keys = str(weights.keys())[4:-1].split(", ")
         for key in keys:
             vector = str(weights.get(int(key)))[6:-2].split(",")
-            self.modelWeights[key] = _convert_to_vector(vector)
+            self.modelWeights[int(key)] = _convert_to_vector(vector)
         # intercepts
         interceptsKeys = str(intercept.keys())[4:-1].split(", ")
         for key in interceptsKeys:
-            self.modelIntercepts[key] = float(str(intercept.get(int(key)))[5:-1])
+            self.modelIntercepts[int(key)] = float(str(intercept.get(int(key)))[5:-1])
         self.threshold = None
 
 
@@ -78,7 +78,7 @@ class LTRSVMModel():
         Predict a value for a single point using the user's model trained.
         """
         x = _convert_to_vector(x)
-        margin = self.modelWeights[userId].dot(x) + self.modelIntercepts[userId]
+        margin = self.modelWeights[int(userId)].dot(x) + self.modelIntercepts[int(userId)]
         if self.threshold is None:
             return margin
         else:

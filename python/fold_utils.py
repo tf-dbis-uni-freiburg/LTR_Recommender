@@ -848,8 +848,8 @@ class FoldEvaluator:
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
         print("Store evaluation per user.")
-
         evaluation_per_user.persist()
+
         # store results per fold
         self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
 

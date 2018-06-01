@@ -239,10 +239,7 @@ class PapersPairBuilder(Transformer):
                                                       [self.paperId_col, self.peer_paperId_col])
             else:
                 positive_class_per_paper = positive_class_per_paper.select(self.userId_col, self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
-                if(self.model_training == "imp"):
-                    positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
-                else:
-                    positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+                positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
@@ -261,12 +258,9 @@ class PapersPairBuilder(Transformer):
                 negative_class_per_paper = negative_class_per_paper.select(self.userId_col, self.paperId_col,
                                                                            F.explode("negative_class_papers").alias(
                                                                                self.peer_paperId_col))
-                if (self.model_training == "imp"):
-                    negative_class_dataset = dataset.join(negative_class_per_paper,
+                negative_class_dataset = dataset.join(negative_class_per_paper,
                                                           [self.userId_col, self.paperId_col, self.peer_paperId_col])
-                else:
-                    negative_class_dataset = dataset.join(negative_class_per_paper,
-                                                          [self.paperId_col, self.peer_paperId_col])
+
 
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf( self.peer_paper_vector_col, self.paper_vector_col))
