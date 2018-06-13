@@ -1,4 +1,5 @@
 from pyspark.sql import functions as F
+import csv
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from random import shuffle
@@ -112,7 +113,7 @@ class Fold:
         # save candidate set for each paper in the test set
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.candidate_set.coalesce(1).write.parquet( Fold.get_candidate_set_data_frame_path(self.index, distributed=False))
+        self.candidate_set.coalesce(1).write.parquet(Fold.get_candidate_set_data_frame_path(self.index, distributed=False))
 
 
     @staticmethod
@@ -180,7 +181,7 @@ class Fold:
             return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_CSV_FILENAME
 
     @staticmethod
-    def get_evaluation_results_frame_path(fold_index, model_training, distributed=True):
+    def get_evaluation_results_frame_path(fold_index, model_training, peer_count, pair_generation, distributed=True):
         """
         Get the path to the file/folder where evaluation results for each user were stored. For the identification of a fold
         its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
@@ -191,9 +192,9 @@ class Fold:
         :return: path to the file/folder
         """
         if (distributed):
-            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + Fold.RESULTS_CSV_FILENAME
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + str(peer_count) + "-" + pair_generation + Fold.RESULTS_CSV_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + Fold.RESULTS_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + model_training + "-" + str(peer_count) + "-" + pair_generation + "-" + Fold.RESULTS_CSV_FILENAME
 
     @staticmethod
     def get_prediction_data_frame_path(fold_index, model_training, distributed=True):
@@ -592,10 +593,13 @@ class FoldValidator():
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
             file.write("fold " + str(i) + "\n")
+            file.write("Model training: " + self.model_training + "\n")
+            file.write("Pair generation: " + self.pairs_generation + "\n")
+            file.write("Peer count: " + str(self.peer_papers_count) + "\n")
             file.close()
 
             # loading the fold
-            loadingTheFold = datetime.datetime.now()
+            start_time = datetime.datetime.now()
             fold = self.load_fold(spark, i)
 
             # drop some unneeded columns
@@ -617,13 +621,7 @@ class FoldValidator():
             fold.ldaModel.paper_profiles.persist()
             fold.candidate_set.persist()
 
-            lf = datetime.datetime.now() - loadingTheFold
-            file = open("results/execution.txt", "a")
-            file.write("Loading the fold " + str(lf) + "\n")
-            file.close()
-
             # Training LTR
-            ltrTraining = datetime.datetime.now()
             ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
 
@@ -631,36 +629,33 @@ class FoldValidator():
             print("Fitting LTR.... .Model:" + str(self.model_training))
             ltr.fit(fold.training_data_frame)
 
-            lrt = datetime.datetime.now() - ltrTraining
-            file = open("results/execution.txt", "a")
-            file.write("Training LTR(fit)(+ LDA transform), type " + str(self.model_training) + " Time: " + str(lrt) + "\n")
-            file.close()
-
             print("Making predictions...")
 
             # PREDICTION by LTR
-            ltrPrediction = datetime.datetime.now()
             print("Transforming the candidate papers by using the model.")
             candidate_papers_with_predictions = ltr.transform(fold.candidate_set)
 
             candidate_papers_with_predictions.persist()
 
-            ltrPr = datetime.datetime.now() - ltrPrediction
-            file = open("results/execution.txt", "a")
-            file.write("Prediction LTR(transform):" + str(ltrPr) + "\n")
-            file.close()
-
             # EVALUATION
-            eval = datetime.datetime.now()
-
             print("Starting evaluations...")
 
-            FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10] , k_recall = [x for x in range(5, 200, 20)], model_training = self.model_training)\
-            .evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score", userId_col = self.userId_col, paperId_col = self.paperId_col)
-            evalTime = datetime.datetime.now() - eval
+            fold_evaluator = FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10], k_recall = [x for x in range(5, 200, 20)],
+                                           model_training = self.model_training,
+                                           peers_count=self.peer_papers_count,
+                                           pairs_generation=self.pairs_generation)
+            evaluation_per_user = fold_evaluator.evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score",  paperId_col = self.paperId_col)
+            evaluation_per_user.collect()
+            end_time = datetime.datetime.now() - start_time
             file = open("results/execution.txt", "a")
-            file.write("Evaluation:" + str(evalTime) + "\n")
+            file.write("Overall time:" + str(end_time) + "\n")
             file.close()
+
+            # store evaluations per user
+            fold_evaluator.store_fold_results(fold.index, evaluation_per_user, distributed=False)
+
+            # store avg results for a fold
+            fold_evaluator.append_fold_overall_result(fold.index, evaluation_per_user, userId_col="user_id")
 
             print("Unpersist the data")
             candidate_papers_with_predictions.unpersist()
@@ -671,33 +666,39 @@ class FoldValidator():
             fold.candidate_set.unpersist()
 
 
+
 class FoldEvaluator:
     """ 
     Class that calculates evaluation metrics over a fold. Three metrics are maintained - MRR, NDCG and Recall. 
     """
 
     """ Name of the file in which results for a fold are written. """
-    RESULTS_CSV_FILENAME = "evaluation-results.txt"
+    RESULTS_CSV_FILENAME = "evaluation-results.csv"
 
-    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm"):
+    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp"):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
         self.model_training = model_training
-        self.max_top_k =  max((k_mrr + k_ndcg + k_recall))
+        self.max_top_k = max((k_mrr + k_ndcg + k_recall))
+        self.peers_count = peers_count
+        self.pairs_generation = pairs_generation
 
+        column_names = []
         # write a file for all folds, it contains a row per fold
-        file = open( "results/" + self.model_training + "-" + self.RESULTS_CSV_FILENAME, "a")
-        header_line = "fold_index |"
         for k in k_mrr:
-            header_line = header_line + " MRR@" + str(k) + " |"
+            column_names.append("MRR@" + str(k))
         for k in k_recall:
-            header_line = header_line + " RECALL@" + str(k) + " |"
+           column_names.append("RECALL@" + str(k))
         for k in k_ndcg:
-            header_line = header_line + " NDCG@" + str(k) + " |"
-        # write the header in the file
-        file.write(header_line + " \n")
-        file.close()
+            column_names.append("NDCG@" + str(k))
+        column_names.append("fold_index")
+
+        file_name = "results/" + self.model_training + "-" + str(
+            self.peers_count) + "-" + self.pairs_generation + "-" + self.RESULTS_CSV_FILENAME
+        with open(file_name, 'a') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(column_names)
 
 
     def evaluate_fold(self, predictions, fold, score_col = "ranking_score", userId_col = "user_id", paperId_col = "paper_id"):
@@ -847,23 +848,10 @@ class FoldEvaluator:
 
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
-        print("Store evaluation per user.")
-        evaluation_per_user.persist()
-
-        # store results per fold
-        self.store_fold_results(fold.index, self.model_training, evaluation_per_user, distributed=False)
-
-        # store overall results
-        # drop user id column, we do not need it
-        evaluation_per_user = evaluation_per_user.drop(userId_col)
-        # take the average over each column
-        avg = evaluation_per_user.groupBy().avg()
-        self.append_fold_overall_result(fold.index, avg)
-
-        evaluation_per_user.unpersist()
+        print("Return evaluation per user.")
         return evaluation_per_user
 
-    def store_fold_results(self, fold_index, model_training, evaluations_per_user, distributed=True):
+    def store_fold_results(self, fold_index, evaluations_per_user, distributed=True):
         """
         Store evaluation results for a fold.
         
@@ -874,25 +862,28 @@ class FoldEvaluator:
         """
         # save evaluation results
         if(distributed):
-            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, model_training))
+            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peer_count, self.pair_generation))
         else:
-            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, model_training, distributed=False))
+            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peer_count, self.pair_generation, distributed=False))
 
-    def append_fold_overall_result(self, fold_index, overall_evaluation):
+    def append_fold_overall_result(self, fold_index, evaluations_per_user, userId_col="user_id"):
         """
-        TODO add comments
+        Store avg per user for a fold
         :param overall_evaluation: 
         :return: 
         """
-        # write a file for each fold, it contains a row per user
-        file = open("results/" + self.model_training + "-" + self.RESULTS_CSV_FILENAME, "a")
-        line = ""
-        line = line + "| " + str(fold_index)
-        overall_evaluation_list = np.array(overall_evaluation.collect())[0]
-        for metric_value in overall_evaluation_list:
-            line = line + "| " + str(metric_value)
-        file.write(line)
-        file.close()
+
+        # drop user id column, we do not need it
+        evaluation_per_user = evaluations_per_user.drop(userId_col)
+        # take the average over each column
+        avg = evaluation_per_user.groupBy().avg()
+        overall_evaluation_list = np.array(avg.collect())[0]
+        overall_evaluation_list = overall_evaluation_list.tolist()
+        overall_evaluation_list.append(fold_index)
+        file_name = "results/" + self.model_training + "-" + str(self.peers_count) + "-" + self.pairs_generation + "-" + self.RESULTS_CSV_FILENAME
+        with open(file_name, 'a') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(overall_evaluation_list)
 
 class FoldStatisticsWriter:
     """

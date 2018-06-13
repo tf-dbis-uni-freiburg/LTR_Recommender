@@ -46,7 +46,7 @@ class LTRSVMModel():
        A linear model that has a map of coefficients and a map of intercepts.
        For each user in the trained data set, there is an entry in both maps.
        These entries contain model information for a particular user. If a prediction
-       needs to be done, it depends on the user id which a paper is contected to.
+       needs to be done, it depends on the user id which a paper is connected to.
        """
 
     def __init__(self, weights, intercept):
@@ -78,7 +78,7 @@ class LTRSVMModel():
         Predict a value for a single point using the user's model trained.
         """
         x = _convert_to_vector(x)
-        margin = self.modelWeights[int(userId)].dot(x) + self.modelIntercepts[int(userId)]
+        margin = self.modelWeights[int(userId)].dot(x) # + self.modelIntercepts[int(userId)]
         if self.threshold is None:
             return margin
         else:
