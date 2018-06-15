@@ -645,14 +645,17 @@ class FoldValidator():
                                            peers_count=self.peer_papers_count,
                                            pairs_generation=self.pairs_generation)
             evaluation_per_user = fold_evaluator.evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score",  paperId_col = self.paperId_col)
-            evaluation_per_user.collect()
+            result = evaluation_per_user.collect()
             end_time = datetime.datetime.now() - start_time
             file = open("results/execution.txt", "a")
             file.write("Overall time:" + str(end_time) + "\n")
             file.close()
 
+
+            # TODO no need to store results when testing
             # store evaluations per user
-            fold_evaluator.store_fold_results(fold.index, evaluation_per_user, distributed=False)
+            # columns = evaluation_per_user.schema.names
+            # fold_evaluator.store_fold_results(fold.index, result, columns, distributed=False)
 
             # store avg results for a fold
             fold_evaluator.append_fold_overall_result(fold.index, evaluation_per_user, userId_col="user_id")
@@ -851,7 +854,7 @@ class FoldEvaluator:
         print("Return evaluation per user.")
         return evaluation_per_user
 
-    def store_fold_results(self, fold_index, evaluations_per_user, distributed=True):
+    def store_fold_results(self, fold_index, evaluations_per_user, columns, distributed=True):
         """
         Store evaluation results for a fold.
         
@@ -862,9 +865,16 @@ class FoldEvaluator:
         """
         # save evaluation results
         if(distributed):
-            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peer_count, self.pair_generation))
+            evaluations_per_user.write.csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peers_count, self.pairs_generation))
         else:
-            evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peer_count, self.pair_generation, distributed=False))
+            filename = Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peers_count, self.pairs_generation, distributed=False)
+            with open(filename, 'wb') as myfile:
+                wr = csv.writer(myfile)
+                wr.writerow(columns)
+                for i in evaluations_per_user:
+                    wr.writerow(i)
+            # TODO try toPandas on the mitarbeiter cluster
+            # evaluations_per_user.toPandas().to_csv(Fold.get_evaluation_results_frame_path(fold_index, self.model_training, self.peers_count, self.pairs_generation, distributed=False))
 
     def append_fold_overall_result(self, fold_index, evaluations_per_user, userId_col="user_id"):
         """
