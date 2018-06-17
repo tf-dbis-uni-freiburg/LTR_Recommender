@@ -1,5 +1,6 @@
 from pyspark.sql import functions as F
 import csv
+from pyspark.sql import Row
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from random import shuffle
@@ -9,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 from pyspark.sql.window import Window
 import datetime
 import numpy as np
+from pyspark.ml.clustering import KMeans
 
 class Fold:
     """
@@ -21,16 +23,18 @@ class Fold:
     published before the end date of a test set in the fold.
     """
 
-    """ Name of the file in which test data frame of the fold is stored. """
+    """ Name of the file in which test data frame of a fold is stored. """
     TEST_DF_CSV_FILENAME = "test.csv"
-    """ Name of the file in which training data frame of the fold is stored. """
+    """ Name of the file in which training data frame of a fold is stored. """
     TRAINING_DF_CSV_FILENAME = "training.csv"
-    """ Name of the file in which papers corpus of the fold is stored. """
+    """ Name of the file in which papers corpus of a fold is stored. """
     PAPER_CORPUS_DF_CSV_FILENAME = "papers-corpus.csv"
-    """ Name of the file in which LDA data frame of the fold is stored. """
-    LDA_DF_CSV_FILENAME = "lda-papers.parquet"
-    """ Name of the file in which candicate set data frame of the fold is stored. """
-    CANDIDATE_DF_CSV_FILENAME = "candidate-set.csv"
+    """ Name of the file in which LDA data frame of a fold is stored. """
+    LDA_DF_FILENAME = "lda-papers.parquet"
+    """ Name of the file in which candidate set data frame of a fold is stored. """
+    CANDIDATE_DF_FILENAME = "candidate-set.parquet"
+    """ Name of the file in which information for user clusters for a fold is stored. """
+    USER_CLUSTERS_DF_FILENAME = "user-cluster.parquet"
     """ Name of the file in which overall results are written. """
     RESULTS_CSV_FILENAME = "results.csv"
     """ Prefix of the name of the folder in which the fold is stored in distributed manner. """
@@ -51,6 +55,8 @@ class Fold:
         self.ldaModel = None
         # user_id, list of candidate papers
         self.candidate_set = None
+        # cluster_id, centroid, [user_ids] a list of users that belong to this cluster
+        self.user_clusters = None
 
     def set_index(self, index):
         self.index = index
@@ -91,6 +97,10 @@ class Fold:
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
         self.candidate_set.write.parquet(Fold.get_candidate_set_data_frame_path(self.index))
+        # save user clusters
+        # format - cluster_id, centroid, [user_ids]
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        # self.user_clusters.write.parquet(Fold.get_user_clusters_data_frame_path(self.index))
 
     def store(self):
         """
@@ -114,7 +124,10 @@ class Fold:
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
         self.candidate_set.coalesce(1).write.parquet(Fold.get_candidate_set_data_frame_path(self.index, distributed=False))
-
+        # save user clusters
+        # format - cluster_id, centroid, [user_ids]
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        # self.user_clusters.coalesce(1).write.parquet(Fold.get_user_clusters_data_frame_path(self.index, distributed=False))
 
     @staticmethod
     def get_test_data_frame_path(fold_index, distributed=True):
@@ -176,9 +189,9 @@ class Fold:
         :return: path to the file/folder
         """
         if (distributed):
-            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_CSV_FILENAME
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.CANDIDATE_DF_FILENAME
 
     @staticmethod
     def get_evaluation_results_frame_path(fold_index, model_training, peer_count, pair_generation, distributed=True):
@@ -224,9 +237,26 @@ class Fold:
         :return: path to the file/folder
         """
         if (distributed):
-            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_CSV_FILENAME
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_FILENAME
         else:
-            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_CSV_FILENAME
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.LDA_DF_FILENAME
+
+    @staticmethod
+    def get_user_clusters_data_frame_path(fold_index, distributed=True):
+        """
+        Get the path to the file/folder where user cluster data frame for a particular fold was stored. For the identification of a fold
+        its fold_index is used. Because a fold can be stored in both distributed(partitioned) and non-distributed(single csv file)
+        manner, specify from which you want to load it. User cluster data frame contains cluster_id, centroid, [user_ids] list of user ids
+        which belongs to that cluster
+
+        :param fold_index: used for identification of a fold
+        :param distributed: if the fold was stored in distributed or non-distributed manner
+        :return: path to the file/folder
+        """
+        if (distributed):
+            return Fold.DISTRIBUTED_PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.USER_CLUSTERS_DF_FILENAME
+        else:
+            return Fold.PREFIX_FOLD_FOLDER_NAME + str(fold_index) + "/" + Fold.USER_CLUSTERS_DF_FILENAME
 
 class FoldCandidateSetGenerator:
     """
@@ -275,12 +305,79 @@ class FoldCandidateSetGenerator:
         # user_id|   test_user_library | training_user_library
         test_training_user_library = test_user_library.join(training_user_library, self.userId_col)
 
-        k = 18000
+        k = 5000
         candidate_set = test_training_user_library.withColumn("candidate_set", get_candidate_set_per_user_udf("training_user_library",
                                                                                            "test_user_library",
                                                                                            F.lit(k)))
         candidate_set = candidate_set.select(self.userId_col, "candidate_set")
         return candidate_set
+
+class FoldUserClustersGenerator:
+    """
+    TODO write comments
+    """
+
+    def __init__(self, spark, lda_paper_profiles, training_data_frame, test_data_frame, k_clusters = 3,
+                 userId_col = "user_id", paperId_col = "paper_id", ldaVector_col="lda_vector",
+                 clusterId_col ="cluster_id", centroid_col = "centroid"):
+        self.spark = spark
+        self.lda_paper_profiles = lda_paper_profiles
+        self.training_data_frame = training_data_frame
+        self.test_data_frame = test_data_frame
+        self.k_clusters = k_clusters
+        self.userId_col = userId_col
+        self.paperId_col = paperId_col
+        self.ldaVector_col = ldaVector_col
+        self.clusterId_col = clusterId_col
+        self.centroid_col = centroid_col
+
+    def generate_clusters(self):
+        training_data_frame = self.training_data_frame.select(self.userId_col, self.paperId_col)
+        test_data_frame = self.test_data_frame.select(self.userId_col, self.paperId_col)
+        fold_data_frame = training_data_frame.union(test_data_frame)
+
+        # add lda profiles to each paper
+        fold_data_frame = fold_data_frame.join(self.lda_paper_profiles, self.paperId_col)
+        # group all lda vectors of a user in a list
+        user_lda_vectors = fold_data_frame.groupBy(self.userId_col).agg(F.collect_list(self.ldaVector_col).alias("user_lda_vectors"))
+
+        def sum_vectors(vectors):
+            vector = vectors[0]
+            for i in vectors[1:]:
+                vector = vector + i
+            return Vectors.dense(vector)
+        sum_vectors_udf = F.udf(sum_vectors, VectorUDT())
+
+        # sum vectors into one user profile vector, probability distribution is destroyed
+        user_profiles = user_lda_vectors.withColumn("user_profile", sum_vectors_udf("user_lda_vectors")).drop("user_lda_vectors")
+
+        # make predictions using the model over
+        user_profiles = MLUtils.convertVectorColumnsToML(user_profiles, "user_profile")
+
+        kmeans = KMeans(k=self.k_clusters, featuresCol="user_profile")
+        model = kmeans.fit(user_profiles)
+
+        # TODO no need of centroids
+        centers = model.clusterCenters()
+        # create data frame with centroids
+        centroids_array = []
+        for i in centers:
+            i = Vectors.dense(i)
+            centroids_array.append(Row(centroid=i))
+        centroids = self.spark.createDataFrame(centroids_array)
+
+        # add index to each centroid
+        centroids_schema = StructType([StructField(self.centroid_col, VectorUDT(), False),
+                                       StructField(self.clusterId_col, IntegerType(), False)])
+        #  format - centroid | cluster_id
+        centroids = centroids.rdd.zipWithIndex().map(lambda x: (x[0][0], int(x[1]))).toDF(centroids_schema)
+        user_clusters = model.transform(user_profiles).drop("user_profile").withColumnRenamed("prediction", self.clusterId_col)
+        # cluster_id, [user_id]
+        user_clusters = user_clusters.groupBy(self.clusterId_col).agg(F.collect_list(self.userId_col).alias("user_ids"))
+
+        # add the centroid to each cluster
+        user_clusters = user_clusters.join(centroids, self.clusterId_col)
+        return user_clusters
 
 class FoldSplitter:
     """
@@ -346,7 +443,7 @@ class FoldSplitter:
             fold.set_papers_corpus(fold_papers_corpus)
 
             # train LDA
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=150,
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=5,
                                           paperId_col=paperId_col, tf_map_col=tf_map_col,
                                           output_col="lda_vector")
             ldaModel = ldaVectorizer.fit(bag_of_words)
@@ -358,11 +455,19 @@ class FoldSplitter:
             candidate_set = candidateGenerator.generate_candidate_set()
             fold.candidate_set = candidate_set
 
+            # TODO think if this can be part of a fold
+            # # generate use profiles based on lda vectors of their liked papers
+            # userProfilesGenerator = FoldUserProfileGenerator(spark, ldaModel.paper_profiles, fold.training_data_frame, fold.test_data_frame,
+            #                                                 userId_col, paperId_col, ldaModel.output_col, output_col="user_profiles")
+            # # format - user_id, user_profiles
+            # user_profiles = userProfilesGenerator.generate_user_profiles()
+
             # add the fold to the result list
             folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
+            return folds
         return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
@@ -484,11 +589,25 @@ class FoldValidator():
         and training data frame
         """
         # creates all splits
+        start_time = datetime.datetime.now()
         folds = FoldSplitter().split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
                                                 self.paperId_col,
                                                 self.citeulikePaperId_col, self.userId_col)
+        end_time = datetime.datetime.now() - start_time
+        file = open("results/creation-folds.txt", "a")
+        file.write("Generating folds: ")
+        file.write("End time: " + str(end_time) + "\n")
+        file.close()
+
+
+        start_time = datetime.datetime.now()
         # store all folds
         FoldsUtils.store_folds(folds)
+        end_time = datetime.datetime.now() - start_time
+        file = open("results/creation-folds.txt", "a")
+        file.write("Storing folds: ")
+        file.write("End time: " + str(end_time) + "\n")
+        file.close()
         # compute statistics for each fold and store it
         FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
@@ -602,6 +721,13 @@ class FoldValidator():
             start_time = datetime.datetime.now()
             fold = self.load_fold(spark, i)
 
+            # TODO only for testing to find best possible K
+            # TODO no need of centroids
+            userClusterGenerator = FoldUserClustersGenerator(spark, fold.ldaModel.paper_profiles, fold.training_data_frame, fold.test_data_frame, k_clusters = 3,
+                 userId_col = "user_id", paperId_col = "paper_id", ldaVector_col="lda_vector", clusterId_col ="cluster_id", centroid_col = "centroid" )
+            # format - cluster_id, centroid, user_ids
+            user_clusters = userClusterGenerator.generate_clusters()
+
             # drop some unneeded columns
             # user_id | citeulike_paper_id | paper_id |
             fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
@@ -622,9 +748,8 @@ class FoldValidator():
             fold.candidate_set.persist()
 
             # Training LTR
-            ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+            ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, user_clusters=user_clusters, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
-
 
             print("Fitting LTR.... .Model:" + str(self.model_training))
             ltr.fit(fold.training_data_frame)
@@ -634,7 +759,6 @@ class FoldValidator():
             # PREDICTION by LTR
             print("Transforming the candidate papers by using the model.")
             candidate_papers_with_predictions = ltr.transform(fold.candidate_set)
-
             candidate_papers_with_predictions.persist()
 
             # EVALUATION
@@ -667,8 +791,6 @@ class FoldValidator():
             fold.papers_corpus.papers.unpersist()
             fold.ldaModel.paper_profiles.unpersist()
             fold.candidate_set.unpersist()
-
-
 
 class FoldEvaluator:
     """ 

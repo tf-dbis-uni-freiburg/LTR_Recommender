@@ -216,6 +216,7 @@ class PapersPairBuilder(Transformer):
         split_papers_udf = F.udf(split_papers, ArrayType(ArrayType(StringType())))
 
         if (self.pairs_generation == "edp" ): # self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
+            print("IN EDP")
             # 50 % of the paper_pairs with label 1, 50% with label 0
             peers_per_paper = None
             if(self.model_training == "gm"):
@@ -231,66 +232,46 @@ class PapersPairBuilder(Transformer):
             # positive label 1
             positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
 
-            if(self.model_training == "gm"):
-                positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
+            # user_id | paper_id | peer_paper_id
+            positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
                                                                            F.explode("positive_class_papers").alias(
                                                                                self.peer_paperId_col))
-                positive_class_dataset = dataset.join(positive_class_per_paper,
-                                                      [self.paperId_col, self.peer_paperId_col])
-            else:
-                positive_class_per_paper = positive_class_per_paper.select(self.userId_col, self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
-                positive_class_dataset = dataset.join(positive_class_per_paper, [self.userId_col, self.paperId_col, self.peer_paperId_col])
-
+            positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
             # add the difference (paper_vector - peer_paper_vector) with label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
 
-
             # negative label 0
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
-            if (self.model_training == "gm"):
-                negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(
+
+            negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(
                                                                                self.peer_paperId_col))
-                negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
-            else:
-
-                negative_class_per_paper = negative_class_per_paper.select(self.userId_col, self.paperId_col,
-                                                                           F.explode("negative_class_papers").alias(
-                                                                               self.peer_paperId_col))
-                negative_class_dataset = dataset.join(negative_class_per_paper,
-                                                          [self.userId_col, self.paperId_col, self.peer_paperId_col])
-
-
+            negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf( self.peer_paper_vector_col, self.paper_vector_col))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
-            dataset = positive_class_dataset.union(negative_class_dataset)
+            result = positive_class_dataset.union(negative_class_dataset)
         elif (self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
-
-            # vector_diff_udf = F.udf(diff, VectorUDT())
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            positive_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf( self.paper_vector_col, self.peer_paper_vector_col))
+            positive_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
-
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col, self.paper_vector_col))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
-
-            dataset = positive_class_dataset.union(negative_class_dataset)
+            result = positive_class_dataset.union(negative_class_dataset)
         elif (self.pairs_generation == "ocp"): #self.Pairs_Generation.ONE_CLASS_PAIRS):
-            # vector_diff_udf = F.udf(diff, VectorUDT())
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            result = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
-            dataset = dataset.withColumn(self.label_col, F.lit(1))
+            result = result.withColumn(self.label_col, F.lit(1))
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
-        return dataset
+        return result
 
 
 class LearningToRank(Estimator, Transformer):
@@ -340,7 +321,7 @@ class LearningToRank(Estimator, Transformer):
     #     """
     #     INDIVIDUAL MODEL SEQUENTIAL = 1
 
-    def __init__(self, spark, papers_corpus, paper_profiles_model, model_training= "gm",
+    def __init__(self, spark, papers_corpus, paper_profiles_model, user_clusters=None, model_training= "gm",
                  pairs_generation= "edp" , peer_papers_count=10,
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
@@ -389,6 +370,9 @@ class LearningToRank(Estimator, Transformer):
         self.userId_col = userId_col
         self.features_col = features_col
         self.model_training = model_training
+        # data frame with format cluster_id, centroid, [user_ids] which belong to this cluster
+        self.user_clusters = user_clusters
+
         # user_id, model per user
         self.models = {}
 
@@ -397,7 +381,9 @@ class LearningToRank(Estimator, Transformer):
         Train a SVM model/models based on the input data. Dataset contains (at least) (user, paper) pairs.
         Each paper identifier is in paperId_col. Each user identifier is in userId_col. 
         See class comments from more details about the functionality of the method.
-
+        
+        :param dataset training data of a fold. contains user_id, paper_id. All papers
+        that a user likes in the training set.
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
         # train multiple models, one for each user in the data set
@@ -409,11 +395,27 @@ class LearningToRank(Estimator, Transformer):
                 # select only records for particular user, only those papers liked by the current user
                 unique_user_condition = self.userId_col + "==" + str(userId[0])
                 user_dataset = dataset.filter(unique_user_condition)
-                # Fit the model over full data set and produce only one model for all users
+                # Fit the model over data for a user
                 user_lsvcModel = self.train_single_SVM_model(user_dataset)
                 # add the model for the user
-                self.models[userId] = user_lsvcModel
+                self.models[userId[0]] = user_lsvcModel
             return self.models
+        # if we have to train multiple models based on user clustering
+        elif (self.model_training == "cm"):
+            # extract all distinct clusters
+            distinct_cluster_ids = self.user_clusters.select("cluster_id").distinct().collect()
+            for clusterId in distinct_cluster_ids:
+                # select only users for particular cluster
+                unique_cluster_condition = "cluster_id" + "==" + str(clusterId[0])
+                # cluster
+                user_cluster = self.user_clusters.filter(unique_cluster_condition)
+                users_in_cluster =  user_cluster.withColumn(self.userId_col, F.explode("user_ids")).select(self.userId_col)
+                # select only those papers in the training set that are liked by users in the cluster
+                cluster_dataset = dataset.join(users_in_cluster, self.userId_col)
+                # Fit the model over data for a cluster based on users
+                cluster_lsvcModel = self.train_single_SVM_model(cluster_dataset)
+                # add the model for a cluster
+                self.models[clusterId[0]] = cluster_lsvcModel
         # Fit the model over full dataset and produce only one model for all users
         elif (self.model_training == "gm"):
             lsvcModel = self.train_single_SVM_model(dataset)
@@ -472,19 +474,7 @@ class LearningToRank(Estimator, Transformer):
         # drop lda vectors - not needed anymore
         dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
         lsvcModel = None
-        if (self.model_training == "ims" or self.model_training == "gm"):
-            # create Label Points needed for the model
-            def createLabelPoint(line):
-                # label, features
-                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
-                return LabeledPoint(line[-1], line[-2])
-
-            # convert data points data frame to RDD
-            labeled_data_points = dataset.rdd.map(createLabelPoint)
-            # Build the model
-            lsvcModel = SVMWithSGD().train(labeled_data_points)
-
-        elif (self.model_training == "imp"):
+        if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
                 # user_id | paper_id | peer_paper_id | citeulike_paper_id | features | label
@@ -496,6 +486,18 @@ class LearningToRank(Estimator, Transformer):
 
             # Build the model
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
+        else:
+
+            # create Label Points needed for the model
+            def createLabelPoint(line):
+                # label, features
+                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
+                return LabeledPoint(line[-1], line[-2])
+
+            # convert data points data frame to RDD
+            labeled_data_points = dataset.rdd.map(createLabelPoint)
+            # Build the model
+            lsvcModel = SVMWithSGD().train(labeled_data_points)
 
         # return the default columns of the paper profiles model, the model is ready for the training
         # of the next SVM model
@@ -529,24 +531,51 @@ class LearningToRank(Estimator, Transformer):
         self.paper_profiles_model.setOutputCol(self.features_col)
 
         # add paper representation to each paper in the candidate set
-        # candidate set forma - user_id, paper_id
+        # candidate set format - user_id, paper_id
         predictions = self.paper_profiles_model.transform(candidate_set)
         # make predictions using the model over
         predictions = MLUtils.convertVectorColumnsFromML(predictions, self.features_col)
 
+        def predict(id, features):
+            models = models_br.value
+            model = models[id]
+            prediction = model.predict(features)
+            return float(prediction)
+
+        predict_udf = F.udf(predict, FloatType())
+
         if (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
 
-            print("Predicting mpu ...")
+            print("Predicting ims ...")
             for userId, model in self.models.items():
                 # set threshold to NONE to receive raw predictions from the model
                 model._threshold = None
 
-            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model[p.user_id].predict(p.features))))
+            # broadcast weight vectors for all models
+            models_br = self.spark.sparkContext.broadcast(self.models)
 
-            predictions = predictions_rdd.toDF(predictions_scheme)
+            predictions = predictions.withColumn("ranking_score", predict_udf("user_id", "features")) \
+                    .select(self.userId_col, self.paperId_col, "ranking_score")
+
+
+        elif (self.model_training == "cm"):
+            print("Predicting cm ...")
+            # add cluster id to each user - based on it, prediction are done
+            users_in_cluster = self.user_clusters.withColumn(self.userId_col, F.explode("user_ids")).drop("user_ids")
+            predictions = predictions.join(users_in_cluster, self.userId_col)
+
+            for clusterId, model in self.models.items():
+                # set threshold to NONE to receive raw predictions from the model
+                model._threshold = None
+
+            # broadcast weight vectors for all models
+            models_br = self.spark.sparkContext.broadcast(self.models)
+
+            predictions = predictions.withColumn("ranking_score", predict_udf("cluster_id", "features"))\
+                .select(self.userId_col, self.paperId_col, "ranking_score")
 
         elif (self.model_training == "gm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
-            print("Prediction sm ...")
+            print("Prediction gm ...")
 
             model = self.models[0]
             # set threshold to NONE to receive raw predictions from the model
@@ -555,7 +584,7 @@ class LearningToRank(Estimator, Transformer):
             predictions = predictions.toDF(predictions_scheme)
 
         elif (self.model_training == "imp"):
-            print("Predicting smmu...")
+            print("Predicting imp...")
             model = self.models[0]
 
             # set threshold to NONE to receive raw predictions from the model

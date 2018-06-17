@@ -365,7 +365,7 @@ class LDAModel(Transformer):
         :param paperId_col: name of the paper id column in the input data set of transform()
         :param output_col: name of the result column that the model produces
         """
-        # format (paper_id, tf_vector)
+        # format (paper_id, lda_vector)
         self.paper_profiles = paper_profiles
         self.paperId_col = paperId_col
         self.output_col = output_col
