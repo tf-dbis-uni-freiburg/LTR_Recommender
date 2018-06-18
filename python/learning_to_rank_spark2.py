@@ -149,7 +149,7 @@ class PapersPairBuilder(Transformer):
 
     def __init__(self, pairs_generation, model_training, userId_col="user_id", paperId_col="paper_id", peer_paperId_col="peer_paper_id",
                  paper_vector_col="paper_vector", peer_paper_vector_col="peer_paper_vector",
-                 output_col="pair_paper_difference", label_col="label"):
+                 output_col="features", label_col="label"):
         """
         Constructs the builder.
 
@@ -184,7 +184,6 @@ class PapersPairBuilder(Transformer):
         self.label_col = label_col
 
     def _transform(self, dataset):
-
         # dataset format peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector |
         def diff(v1, v2):
             """
@@ -215,8 +214,13 @@ class PapersPairBuilder(Transformer):
         vector_diff_udf = F.udf(diff, VectorUDT())
         split_papers_udf = F.udf(split_papers, ArrayType(ArrayType(StringType())))
 
+        # gather lda vectors for both papers and peer papers
+        papers_lda_vectors = dataset.select(self.paperId_col, self.paper_vector_col).dropDuplicates()\
+            .alias("papers_lda_vectors").cache()
+        peers_lda_vectors = dataset.select(self.peer_paperId_col, self.peer_paper_vector_col).dropDuplicates()\
+            .alias("peers_lda_vectors").cache()
+
         if (self.pairs_generation == "edp" ): # self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
-            print("IN EDP")
             # 50 % of the paper_pairs with label 1, 50% with label 0
             peers_per_paper = None
             if(self.model_training == "gm"):
@@ -230,28 +234,45 @@ class PapersPairBuilder(Transformer):
             # generate 50/50 distribution to positive/negative class
             peers_per_paper = peers_per_paper.withColumn("equally_distributed_papers", split_papers_udf("peers_per_paper"))
             # positive label 1
+            # user_id | paper_id | peers_per_paper | equally_distributed_papers | positive_class_papers |
             positive_class_per_paper = peers_per_paper.withColumn("positive_class_papers", F.col("equally_distributed_papers")[0])
 
             # user_id | paper_id | peer_paper_id
-            positive_class_per_paper = positive_class_per_paper.select(self.paperId_col,
-                                                                           F.explode("positive_class_papers").alias(
-                                                                               self.peer_paperId_col))
-            positive_class_dataset = dataset.join(positive_class_per_paper, [self.paperId_col, self.peer_paperId_col])
-            # add the difference (paper_vector - peer_paper_vector) with label 1
+            if (self.model_training == "gm"):
+                positive_class_per_paper = positive_class_per_paper.select(positive_class_per_paper[
+                    self.paperId_col].alias("positive_paper_id"), F.explode("positive_class_papers").alias("positive_peer_paper_id")) \
+                    .alias("positive_class_per_paper")
+            else:
+                 positive_class_per_paper = positive_class_per_paper.select(self.userId_col, positive_class_per_paper[self.paperId_col].alias("positive_paper_id"),
+                                                                           F.explode("positive_class_papers").alias("positive_peer_paper_id")).alias("positive_class_per_paper")
+
+            positive_class_dataset = positive_class_per_paper\
+                .join(papers_lda_vectors, positive_class_per_paper["positive_paper_id"] == papers_lda_vectors["paper_id"])\
+                .alias("positive_class_dataset")
+            positive_class_dataset = positive_class_dataset.join(peers_lda_vectors, positive_class_dataset["positive_peer_paper_id"] == peers_lda_vectors["peer_paper_id"])
+
+            # add the difference (paper_vector - peer_paper_vector) with label
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
+            positive_class_dataset = positive_class_dataset.drop("positive_peer_paper_id", "positive_paper_id")
 
             # negative label 0
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
-
-            negative_class_per_paper = negative_class_per_paper.select(self.paperId_col, F.explode("negative_class_papers").alias(
-                                                                               self.peer_paperId_col))
-            negative_class_dataset = dataset.join(negative_class_per_paper, [self.paperId_col, self.peer_paperId_col])
+            if (self.model_training == "gm"):
+                negative_class_per_paper = negative_class_per_paper.select(negative_class_per_paper[self.paperId_col].alias("negative_paper_id"),
+                                                                           F.explode("negative_class_papers").alias(
+                                                                               "negative_peer_paper_id")).alias("negative_class_per_paper")
+            else:
+                negative_class_per_paper = negative_class_per_paper.select(self.userId_col, negative_class_per_paper[self.paperId_col].alias("negative_paper_id"),
+                                                                           F.explode("negative_class_papers").alias("negative_peer_paper_id")).alias("negative_class_per_paper")
+            negative_class_dataset = negative_class_per_paper.join(papers_lda_vectors, negative_class_per_paper["negative_paper_id"] == papers_lda_vectors["paper_id"]).alias("negative_class_dataset")
+            negative_class_dataset = negative_class_dataset.join(peers_lda_vectors, negative_class_dataset["negative_peer_paper_id"] == peers_lda_vectors["peer_paper_id"])
             # add the difference (peer_paper_vector - paper_vector) with label 0
-            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf( self.peer_paper_vector_col, self.paper_vector_col))
+            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col, self.paper_vector_col))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
+            negative_class_dataset = negative_class_dataset.drop("negative_peer_paper_id", "negative_paper_id")
             result = positive_class_dataset.union(negative_class_dataset)
         elif (self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
             # add the difference (paper_vector - peer_paper_vector) with label 1
@@ -271,6 +292,11 @@ class PapersPairBuilder(Transformer):
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
+
+        # unpersist the data
+        papers_lda_vectors.unpersist()
+        peers_lda_vectors.unpersist()
+
         return result
 
 
@@ -446,7 +472,6 @@ class LearningToRank(Estimator, Transformer):
                                 output_col="peer_paper_id")
         # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
-
         # add lda paper representation to each paper based on its paper_id
         dataset = self.paper_profiles_model.transform(dataset)
 
@@ -536,15 +561,25 @@ class LearningToRank(Estimator, Transformer):
         # make predictions using the model over
         predictions = MLUtils.convertVectorColumnsFromML(predictions, self.features_col)
 
-        def predict(id, features):
-            models = models_br.value
-            model = models[id]
-            prediction = model.predict(features)
-            return float(prediction)
+        if (self.model_training == "gm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
+            print("Prediction gm ...")
 
-        predict_udf = F.udf(predict, FloatType())
+            model = self.models[0]
+            # set threshold to NONE to receive raw predictions from the model
+            model._threshold = None
+            predictions = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.features))))
+            predictions = predictions.toDF(predictions_scheme)
 
-        if (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
+        elif (self.model_training == "imp"):
+            print("Predicting imp...")
+            model = self.models[0]
+
+            # set threshold to NONE to receive raw predictions from the model
+            model.threshold = None
+            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.user_id, p.features))))
+            predictions = predictions_rdd.toDF(predictions_scheme)
+
+        elif (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
 
             print("Predicting ims ...")
             for userId, model in self.models.items():
@@ -553,6 +588,14 @@ class LearningToRank(Estimator, Transformer):
 
             # broadcast weight vectors for all models
             models_br = self.spark.sparkContext.broadcast(self.models)
+
+            def predict(id, features):
+                models = models_br.value
+                model = models[id]
+                prediction = model.predict(features)
+                return float(prediction)
+
+            predict_udf = F.udf(predict, FloatType())
 
             predictions = predictions.withColumn("ranking_score", predict_udf("user_id", "features")) \
                     .select(self.userId_col, self.paperId_col, "ranking_score")
@@ -571,27 +614,16 @@ class LearningToRank(Estimator, Transformer):
             # broadcast weight vectors for all models
             models_br = self.spark.sparkContext.broadcast(self.models)
 
+            def predict(id, features):
+                models = models_br.value
+                model = models[id]
+                prediction = model.predict(features)
+                return float(prediction)
+
+            predict_udf = F.udf(predict, FloatType())
+
             predictions = predictions.withColumn("ranking_score", predict_udf("cluster_id", "features"))\
                 .select(self.userId_col, self.paperId_col, "ranking_score")
-
-        elif (self.model_training == "gm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
-            print("Prediction gm ...")
-
-            model = self.models[0]
-            # set threshold to NONE to receive raw predictions from the model
-            model._threshold = None
-            predictions = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.features))))
-            predictions = predictions.toDF(predictions_scheme)
-
-        elif (self.model_training == "imp"):
-            print("Predicting imp...")
-            model = self.models[0]
-
-            # set threshold to NONE to receive raw predictions from the model
-            model.threshold = None
-            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.user_id, p.features))))
-            predictions = predictions_rdd.toDF(predictions_scheme)
-
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
