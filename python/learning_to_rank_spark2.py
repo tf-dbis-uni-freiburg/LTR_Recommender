@@ -244,12 +244,13 @@ class PapersPairBuilder(Transformer):
                     .alias("positive_class_per_paper")
             else:
                  positive_class_per_paper = positive_class_per_paper.select(self.userId_col, positive_class_per_paper[self.paperId_col].alias("positive_paper_id"),
-                                                                           F.explode("positive_class_papers").alias("positive_peer_paper_id")).alias("positive_class_per_paper")
+                                                                           F.explode("positive_class_papers").alias("positive_peer_paper_id"))\
+                                                                            .alias("positive_class_per_paper")
 
             positive_class_dataset = positive_class_per_paper\
-                .join(papers_lda_vectors, positive_class_per_paper["positive_paper_id"] == papers_lda_vectors["paper_id"])\
+                .join(papers_lda_vectors, positive_class_per_paper["positive_paper_id"] == papers_lda_vectors[self.paperId_col])\
                 .alias("positive_class_dataset")
-            positive_class_dataset = positive_class_dataset.join(peers_lda_vectors, positive_class_dataset["positive_peer_paper_id"] == peers_lda_vectors["peer_paper_id"])
+            positive_class_dataset = positive_class_dataset.join(peers_lda_vectors, positive_class_dataset["positive_peer_paper_id"] == peers_lda_vectors[self.peer_paperId_col])
 
             # add the difference (paper_vector - peer_paper_vector) with label
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
@@ -265,9 +266,10 @@ class PapersPairBuilder(Transformer):
                                                                                "negative_peer_paper_id")).alias("negative_class_per_paper")
             else:
                 negative_class_per_paper = negative_class_per_paper.select(self.userId_col, negative_class_per_paper[self.paperId_col].alias("negative_paper_id"),
-                                                                           F.explode("negative_class_papers").alias("negative_peer_paper_id")).alias("negative_class_per_paper")
-            negative_class_dataset = negative_class_per_paper.join(papers_lda_vectors, negative_class_per_paper["negative_paper_id"] == papers_lda_vectors["paper_id"]).alias("negative_class_dataset")
-            negative_class_dataset = negative_class_dataset.join(peers_lda_vectors, negative_class_dataset["negative_peer_paper_id"] == peers_lda_vectors["peer_paper_id"])
+                                                                           F.explode("negative_class_papers").alias("negative_peer_paper_id"))\
+                                                                            .alias("negative_class_per_paper")
+            negative_class_dataset = negative_class_per_paper.join(papers_lda_vectors, negative_class_per_paper["negative_paper_id"] == papers_lda_vectors[self.paperId_col]).alias("negative_class_dataset")
+            negative_class_dataset = negative_class_dataset.join(peers_lda_vectors, negative_class_dataset["negative_peer_paper_id"] == peers_lda_vectors[self.peer_paperId_col])
             # add the difference (peer_paper_vector - paper_vector) with label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col, self.paper_vector_col))
             # add label 0
@@ -296,7 +298,6 @@ class PapersPairBuilder(Transformer):
         # unpersist the data
         papers_lda_vectors.unpersist()
         peers_lda_vectors.unpersist()
-
         return result
 
 
@@ -470,6 +471,7 @@ class LearningToRank(Estimator, Transformer):
         nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
                                 userId_col=self.userId_col,
                                 output_col="peer_paper_id")
+
         # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
         # add lda paper representation to each paper based on its paper_id
@@ -493,6 +495,7 @@ class LearningToRank(Estimator, Transformer):
                                               paper_vector_col=former_paper_output_column,
                                               peer_paper_vector_col="peer_paper_lda_vector",
                                               output_col=self.features_col, label_col="label")
+
         # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
 
@@ -502,9 +505,9 @@ class LearningToRank(Estimator, Transformer):
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
-                # user_id | paper_id | peer_paper_id | citeulike_paper_id | features | label
+                # user_id | paper_id | peer_paper_id | features | label
                 # userId, label, features
-                return UserLabeledPoint(int(line[0]), line[5], line[4])
+                return UserLabeledPoint(int(line[0]), line[4], line[3])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
@@ -512,7 +515,6 @@ class LearningToRank(Estimator, Transformer):
             # Build the model
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
         else:
-
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
