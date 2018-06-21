@@ -37,5 +37,5 @@
 ## How to run
 
 ```
-spark2-submit main.py -input <folder where input data is> -model_training <sm | smmu | mpu> -peers_count <number> -pairs_generation <dp | ocp | edp>
+spark2-submit main.py -input <folder where input data is> -model_training <gm| imps | imp | cm> -peers_count <number> -pairs_generation <dp | ocp | edp>
 ```
