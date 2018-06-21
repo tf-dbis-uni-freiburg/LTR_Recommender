@@ -7,6 +7,8 @@ import pyspark.sql.functions as F
 from pyspark.ml.clustering import LDA
 from pyspark.sql.types import StructType, StructField, IntegerType
 
+from logger import Logger
+
 
 class TFVectorizer(Estimator):
     """
@@ -338,17 +340,22 @@ class LDAVectorizer(Estimator):
         :param data set: input data set, which is an instance of :py:class:`pyspark.sql.DataFrame`
         :returns: a build model which can be used for transformation of a data set
         """
+        Logger.log("Train/Transform TF vectorizer.")
         tfVectorizer = TFVectorizer(self.papers_corpus, paperId_col = self.paperId_col, tf_map_col = self.tf_map_col, output_col = "tf_vector")
         tfVectorizerModel = tfVectorizer.fit(papers)
         # paper_id | tf_vector
         papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
+        Logger.log("Train LDA. Topics:" + str(self.k_topics))
         # Trains a LDA model.
         # The number of topics(clusters) to infer. Must be > 1.
         lda = LDA(featuresCol = "tf_vector", k = self.k_topics)
         model = lda.fit(papers_tf_vectors)
 
+        Logger.log("Transform LDA over paper corpus.")
         # paper_id | lda_vector
         papers_lda_vectors = model.transform(papers_tf_vectors).withColumnRenamed("topicDistribution", self.output_col).drop("tf_vector")
+
+        Logger.log("Return LDA model.")
         return LDAModel(papers_lda_vectors, self.paperId_col, self.output_col);
 
 class LDAModel(Transformer):
@@ -396,6 +403,7 @@ class LDAModel(Transformer):
         :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
+        Logger.log("LTR LDA model transform method called.")
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
 

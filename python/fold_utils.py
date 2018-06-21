@@ -1,6 +1,8 @@
 from pyspark.sql import functions as F
 import csv
 from pyspark.sql import Row
+
+from logger import Logger
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
 from random import shuffle
@@ -418,20 +420,25 @@ class FoldSplitter:
         in a particular paper
         :return: list of folds. Each fold is an object Fold. 
         """
+        Logger.log("Split data into folds.")
         asc_data_frame = history.orderBy(timestamp_col)
         start_date = asc_data_frame.first()[2]
+        Logger.log("Start date:" + str(start_date))
 
         desc_data_frame = history.orderBy(timestamp_col, ascending=False)
         end_date = desc_data_frame.first()[2]
+        Logger.log("End date:" + str(end_date))
+
         fold_index = 1
 
         # add paper id to the ratings
         history = history.join(papers_mapping, citeulikePaperId_col)
-        folds = []
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
         fold_end_date = start_date + relativedelta(months=2 * period_in_months)
         while fold_end_date < end_date:
+            start_time = datetime.datetime.now()
+            Logger.log("Extracting fold:" + str(fold_index))
             fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
@@ -443,17 +450,25 @@ class FoldSplitter:
             fold.set_papers_corpus(fold_papers_corpus)
 
             # train LDA
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=5,
+            topics = 150
+            Logger.log("Training LDA:" + str(fold_index) + ".Number of topics:" + str(topics))
+            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=topics,
                                           paperId_col=paperId_col, tf_map_col=tf_map_col,
                                           output_col="lda_vector")
             ldaModel = ldaVectorizer.fit(bag_of_words)
             fold.ldaModel = ldaModel
 
+            Logger.log("Generate candidate set.")
             # Generate candidate set for each user in the test set
             candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame, fold.test_data_frame,
                                                            userId_col, paperId_col, citeulikePaperId_col)
             candidate_set = candidateGenerator.generate_candidate_set()
             fold.candidate_set = candidate_set
+            end_time = datetime.datetime.now() - start_time
+            file = open("results/creation-folds.txt", "a")
+            file.write("Split and create fold: " + str(fold_index))
+            file.write("End time: " + str(end_time) + "\n")
+            file.close()
 
             # TODO think if this can be part of a fold
             # # generate use profiles based on lda vectors of their liked papers
@@ -462,13 +477,19 @@ class FoldSplitter:
             # # format - user_id, user_profiles
             # user_profiles = userProfilesGenerator.generate_user_profiles()
 
+            Logger.log("Storing of the fold.")
+            start_time = datetime.datetime.now()
+            fold.store_distributed()
+            end_time = datetime.datetime.now() - start_time
+            file = open("results/creation-folds.txt", "a")
+            file.write("Store fold: " + str(fold_index))
+            file.write("End time: " + str(end_time) + "\n")
+            file.close()
+
             # add the fold to the result list
-            folds.append(fold)
             # include the next "period_in_months" in the fold, they will be in its test set
             fold_end_date = fold_end_date + relativedelta(months=period_in_months)
             fold_index += 1
-            return folds
-        return folds
 
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
         """
@@ -588,28 +609,20 @@ class FoldValidator():
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test 
         and training data frame
         """
-        # creates all splits
+        # creates all splits and stores them
+        Logger.log("Creating folds.")
         start_time = datetime.datetime.now()
-        folds = FoldSplitter().split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
+        FoldSplitter().split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
                                                 self.paperId_col,
                                                 self.citeulikePaperId_col, self.userId_col)
         end_time = datetime.datetime.now() - start_time
         file = open("results/creation-folds.txt", "a")
-        file.write("Generating folds: ")
-        file.write("End time: " + str(end_time) + "\n")
-        file.close()
-
-
-        start_time = datetime.datetime.now()
-        # store all folds
-        FoldsUtils.store_folds(folds)
-        end_time = datetime.datetime.now() - start_time
-        file = open("results/creation-folds.txt", "a")
-        file.write("Storing folds: ")
+        file.write("Overall time : ")
         file.write("End time: " + str(end_time) + "\n")
         file.close()
         # compute statistics for each fold and store it
-        FoldsUtils.write_fold_statistics(folds, statistics_file_name)
+        # Logger.log("Calculating statistics for folds.")
+        # FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
         """
@@ -707,7 +720,7 @@ class FoldValidator():
         """
         # load folds one by one and evaluate on them
         # total number of fold  - 5
-        print("Evaluate folds...")
+        Logger.log("Start evaluation over folds.")
         for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
             file = open("results/execution.txt", "a")
@@ -716,6 +729,8 @@ class FoldValidator():
             file.write("Pair generation: " + self.pairs_generation + "\n")
             file.write("Peer count: " + str(self.peer_papers_count) + "\n")
             file.close()
+
+            Logger.log("Load fold: " + str(i))
 
             # loading the fold
             start_time = datetime.datetime.now()
@@ -740,7 +755,7 @@ class FoldValidator():
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
 
-            print("Persisting the fold ...")
+            Logger.log("Persisting the fold ...")
             fold.training_data_frame.persist()
             fold.test_data_frame.persist()
             fold.papers_corpus.papers.persist()
@@ -751,18 +766,18 @@ class FoldValidator():
             ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, user_clusters=user_clusters, pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features", model_training=self.model_training)
 
-            print("Fitting LTR.... .Model:" + str(self.model_training))
+            Logger.log("Fitting LTR.... .Model:" + str(self.model_training))
             ltr.fit(fold.training_data_frame)
 
-            print("Making predictions...")
+            Logger.log("Making predictions...")
 
             # PREDICTION by LTR
-            print("Transforming the candidate papers by using the model.")
+            Logger.log("Transforming the candidate papers by using the model.")
             candidate_papers_with_predictions = ltr.transform(fold.candidate_set)
             candidate_papers_with_predictions.persist()
 
             # EVALUATION
-            print("Starting evaluations...")
+            Logger.log("Starting evaluations...")
 
             fold_evaluator = FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10], k_recall = [x for x in range(5, 200, 20)],
                                            model_training = self.model_training,
@@ -784,7 +799,7 @@ class FoldValidator():
             # store avg results for a fold
             fold_evaluator.append_fold_overall_result(fold.index, evaluation_per_user, userId_col="user_id")
 
-            print("Unpersist the data")
+            Logger.log("Unpersist the data")
             candidate_papers_with_predictions.unpersist()
             fold.training_data_frame.unpersist()
             fold.test_data_frame.unpersist()
@@ -951,7 +966,7 @@ class FoldEvaluator:
         # test for a user with id 626
         # evaluation_per_user = evaluation_per_user.filter(evaluation_per_user[userId_col] == 626)
 
-        print("Adding evaluation...")
+        Logger.log("Adding evaluation...")
         evaluation_columns = []
         # add mrr
         for k in self.k_mrr:
@@ -973,7 +988,7 @@ class FoldEvaluator:
 
         # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
         evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
-        print("Return evaluation per user.")
+        Logger.log("Return evaluation per user.")
         return evaluation_per_user
 
     def store_fold_results(self, fold_index, evaluations_per_user, columns, distributed=True):

@@ -13,6 +13,8 @@ from pyspark.mllib.linalg import Vectors
 from LTR_SVM_spark2 import LTRSVMWithSGD
 from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row
 
+from logger import Logger
+
 
 class PeerPapersSampler(Transformer):
     """
@@ -40,7 +42,7 @@ class PeerPapersSampler(Transformer):
         """
         The input data set consists of (paper, user) pairs. Each paper is represented by paper id, each user by user id.
         The names of the columns that store them are paperId_col and userId_col, respectively.
-        The method generates each pair, a list of peer papers. Each user has a library which is a list of paper ids 
+        The method generates for each pair, a list of peer papers. Each user has a library which is a list of paper ids 
         that the user likes. Peer papers for each paper are generated randomly from all papers in the paper corpus 
         except the papers that the user in the pair(paper,user) likes. At the end, output data set will have an additional 
         column output_col that contains one of the generated ids. The number of row per pair will be equal to the 
@@ -147,8 +149,8 @@ class PapersPairBuilder(Transformer):
     #     ONE_CLASS_PAIRS = 1
     #     EQUALLY_DISTRIBUTED_PAIRS = 2
 
-    def __init__(self, pairs_generation, model_training, userId_col="user_id", paperId_col="paper_id", peer_paperId_col="peer_paper_id",
-                 paper_vector_col="paper_vector", peer_paper_vector_col="peer_paper_vector",
+    def __init__(self, pairs_generation, model_training, vectorizer_model, userId_col="user_id",
+                 paperId_col="paper_id", peer_paperId_col="peer_paper_id",
                  output_col="features", label_col="label"):
         """
         Constructs the builder.
@@ -168,23 +170,20 @@ class PapersPairBuilder(Transformer):
         :param userId_col name of the user id column in the input data frame
         :param paperId_col name of the column that contains paper id
         :param peer_paperId_col name of the column that contains peer paper id
-        :param paper_vector_col name of the column that contains representation of the paper
-        :param peer_paper_vector_col name of the column that contains representation of the peer paper
         :param output_col: name of the column where the result vector is stored
         :param label_col name of the column where the class of the pair/result is stored
         """
         self.pairs_generation = pairs_generation
         self.model_training = model_training
+        self.vectorizer_model = vectorizer_model
         self.paperId_col = paperId_col
         self.userId_col = userId_col
         self.peer_paperId_col = peer_paperId_col
-        self.paper_vector_col = paper_vector_col
-        self.peer_paper_vector_col = peer_paper_vector_col
         self.output_col = output_col
         self.label_col = label_col
 
     def _transform(self, dataset):
-        # dataset format peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector |
+        # dataset format -> peer_paper_id | paper_id | user_id | citeulike_paper_id
         def diff(v1, v2):
             """
             Calculate the difference between two arrays.
@@ -214,20 +213,13 @@ class PapersPairBuilder(Transformer):
         vector_diff_udf = F.udf(diff, VectorUDT())
         split_papers_udf = F.udf(split_papers, ArrayType(ArrayType(StringType())))
 
-        # gather lda vectors for both papers and peer papers
-        papers_lda_vectors = dataset.select(self.paperId_col, self.paper_vector_col).dropDuplicates()\
-            .alias("papers_lda_vectors").cache()
-        peers_lda_vectors = dataset.select(self.peer_paperId_col, self.peer_paper_vector_col).dropDuplicates()\
-            .alias("peers_lda_vectors").cache()
-
         if (self.pairs_generation == "edp" ): # self.Pairs_Generation.EQUALLY_DISTRIBUTED_PAIRS):
             # 50 % of the paper_pairs with label 1, 50% with label 0
             peers_per_paper = None
             if(self.model_training == "gm"):
                 # get a list of peer paper ids per paper
-                dataset = dataset.select(self.paperId_col, self.peer_paperId_col, self.paper_vector_col, self.peer_paperId_col, self.peer_paper_vector_col).dropDuplicates()
-                peers_per_paper = dataset.select(self.paperId_col, self.peer_paperId_col).dropDuplicates()
-                peers_per_paper = peers_per_paper.groupBy(self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
+                dataset = dataset.select(self.paperId_col, self.peer_paperId_col).dropDuplicates()
+                peers_per_paper = dataset.groupBy(self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
             else:
                 peers_per_paper = dataset.groupBy(self.userId_col, self.paperId_col).agg(F.collect_list(self.peer_paperId_col).alias("peers_per_paper"))
 
@@ -239,65 +231,125 @@ class PapersPairBuilder(Transformer):
 
             # user_id | paper_id | peer_paper_id
             if (self.model_training == "gm"):
-                positive_class_per_paper = positive_class_per_paper.select(positive_class_per_paper[
-                    self.paperId_col].alias("positive_paper_id"), F.explode("positive_class_papers").alias("positive_peer_paper_id")) \
-                    .alias("positive_class_per_paper")
+                positive_class_per_paper = positive_class_per_paper.select(self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
             else:
-                 positive_class_per_paper = positive_class_per_paper.select(self.userId_col, positive_class_per_paper[self.paperId_col].alias("positive_paper_id"),
-                                                                           F.explode("positive_class_papers").alias("positive_peer_paper_id"))\
-                                                                            .alias("positive_class_per_paper")
+                 positive_class_per_paper = positive_class_per_paper.select(self.userId_col, self.paperId_col, F.explode("positive_class_papers").alias(self.peer_paperId_col))
 
-            positive_class_dataset = positive_class_per_paper\
-                .join(papers_lda_vectors, positive_class_per_paper["positive_paper_id"] == papers_lda_vectors[self.paperId_col])\
-                .alias("positive_class_dataset")
-            positive_class_dataset = positive_class_dataset.join(peers_lda_vectors, positive_class_dataset["positive_peer_paper_id"] == peers_lda_vectors[self.peer_paperId_col])
+            # add lda paper representation to each paper based on its paper_id
+            positive_class_dataset = self.vectorizer_model.transform(positive_class_per_paper)
+            # get in which columns the result of the transform is stored
+            former_paper_output_column = self.vectorizer_model.output_col
+            former_papeId_column = self.vectorizer_model.paperId_col
+
+            # add lda ids paper representation for peer papers
+            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
+
+            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            positive_class_dataset = self.vectorizer_model.transform(positive_class_dataset)
+
+            # return the default columns of the paper profiles model, the model is ready for the training
+            # of the next SVM model
+            self.vectorizer_model.setPaperIdCol(former_papeId_column)
+            self.vectorizer_model.setOutputCol(former_paper_output_column)
 
             # add the difference (paper_vector - peer_paper_vector) with label
-            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(former_paper_output_column, "peer_paper_lda_vector"))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
-            positive_class_dataset = positive_class_dataset.drop("positive_peer_paper_id", "positive_paper_id")
 
             # negative label 0
             negative_class_per_paper = peers_per_paper.withColumn("negative_class_papers", F.col("equally_distributed_papers")[1])
             if (self.model_training == "gm"):
-                negative_class_per_paper = negative_class_per_paper.select(negative_class_per_paper[self.paperId_col].alias("negative_paper_id"),
-                                                                           F.explode("negative_class_papers").alias(
-                                                                               "negative_peer_paper_id")).alias("negative_class_per_paper")
+                negative_class_per_paper = negative_class_per_paper.select(self.paperId_col,
+                                                                           F.explode("negative_class_papers").alias(self.peer_paperId_col))
             else:
-                negative_class_per_paper = negative_class_per_paper.select(self.userId_col, negative_class_per_paper[self.paperId_col].alias("negative_paper_id"),
-                                                                           F.explode("negative_class_papers").alias("negative_peer_paper_id"))\
-                                                                            .alias("negative_class_per_paper")
-            negative_class_dataset = negative_class_per_paper.join(papers_lda_vectors, negative_class_per_paper["negative_paper_id"] == papers_lda_vectors[self.paperId_col]).alias("negative_class_dataset")
-            negative_class_dataset = negative_class_dataset.join(peers_lda_vectors, negative_class_dataset["negative_peer_paper_id"] == peers_lda_vectors[self.peer_paperId_col])
+                negative_class_per_paper = negative_class_per_paper.select(self.userId_col, self.paperId_col,
+                                                                           F.explode("negative_class_papers").alias(self.peer_paperId_col))
+
+            # add lda paper representation to each paper based on its paper_id
+            negative_class_dataset = self.vectorizer_model.transform(negative_class_per_paper)
+            # get in which columns the result of the transform is stored
+            former_paper_output_column = self.vectorizer_model.output_col
+            former_papeId_column = self.vectorizer_model.paperId_col
+
+            # add lda ids paper representation for peer papers
+            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
+
+            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            negative_class_dataset = self.vectorizer_model.transform(negative_class_dataset)
+
+            # return the default columns of the paper profiles model, the model is ready for the training
+            # of the next SVM model
+            self.vectorizer_model.setPaperIdCol(former_papeId_column)
+            self.vectorizer_model.setOutputCol(former_paper_output_column)
+
             # add the difference (peer_paper_vector - paper_vector) with label 0
-            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col, self.paper_vector_col))
+            negative_class_dataset = negative_class_dataset.withColumn(self.output_col, vector_diff_udf("peer_paper_lda_vector", former_paper_output_column))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
-            negative_class_dataset = negative_class_dataset.drop("negative_peer_paper_id", "negative_paper_id")
+
             result = positive_class_dataset.union(negative_class_dataset)
         elif (self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
+
+            # add lda paper representation to each paper based on its paper_id
+            dataset = self.vectorizer_model.transform(dataset)
+            # get in which columns the result of the transform is stored
+            former_paper_output_column = self.vectorizer_model.output_col
+            former_papeId_column = self.vectorizer_model.paperId_col
+
+            # add lda ids paper representation for peer papers
+            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
+
+            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            dataset = self.vectorizer_model.transform(dataset)
+
+            # return the default columns of the paper profiles model, the model is ready for the training
+            # of the next SVM model
+            self.vectorizer_model.setPaperIdCol(former_papeId_column)
+            self.vectorizer_model.setOutputCol(former_paper_output_column)
+
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            positive_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            positive_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(former_paper_output_column, "peer_paper_lda_vector"))
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
             # add the difference (peer_paper_vector - paper_vector) with label 0
-            negative_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf(self.peer_paper_vector_col, self.paper_vector_col))
+            negative_class_dataset = dataset.withColumn(self.output_col, vector_diff_udf("peer_paper_lda_vector", former_paper_output_column))
             # add label 0
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
             result = positive_class_dataset.union(negative_class_dataset)
         elif (self.pairs_generation == "ocp"): #self.Pairs_Generation.ONE_CLASS_PAIRS):
+
+            # add lda paper representation to each paper based on its paper_id
+            dataset = self.vectorizer_model.transform(dataset)
+            # get in which columns the result of the transform is stored
+            former_paper_output_column = self.vectorizer_model.output_col
+            former_papeId_column = self.vectorizer_model.paperId_col
+
+            # add lda ids paper representation for peer papers
+            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
+
+            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            dataset = self.vectorizer_model.transform(dataset)
+
+            # return the default columns of the paper profiles model, the model is ready for the training
+            # of the next SVM model
+            self.vectorizer_model.setPaperIdCol(former_papeId_column)
+            self.vectorizer_model.setOutputCol(former_paper_output_column)
+
             # add the difference (paper_vector - peer_paper_vector) with label 1
-            result = dataset.withColumn(self.output_col, vector_diff_udf(self.paper_vector_col, self.peer_paper_vector_col))
+            result = dataset.withColumn(self.output_col, vector_diff_udf(former_paper_output_column, "peer_paper_lda_vector"))
             # add label 1
             result = result.withColumn(self.label_col, F.lit(1))
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.pairs_generation + ' is not supported.')
 
-        # unpersist the data
-        papers_lda_vectors.unpersist()
-        peers_lda_vectors.unpersist()
+        # drop lda vectors - not needed anymore
+        result = result.drop("peer_paper_lda_vector", former_paper_output_column)
         return result
 
 
@@ -404,6 +456,7 @@ class LearningToRank(Estimator, Transformer):
         self.models = {}
 
     def _fit(self, dataset):
+        Logger.log("LTR:fit method")
         """
         Train a SVM model/models based on the input data. Dataset contains (at least) (user, paper) pairs.
         Each paper identifier is in paperId_col. Each user identifier is in userId_col. 
@@ -415,10 +468,13 @@ class LearningToRank(Estimator, Transformer):
         """
         # train multiple models, one for each user in the data set
         if (self.model_training == "ims"):
+            Logger.log("Selecting users.")
             # extract all distinct users
             distinct_user_ids = dataset.select(self.userId_col).distinct().collect()
+            Logger.log("Total number of users: " + str(len(distinct_user_ids)))
             # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
+                Logger.log("Train a model for user id: " + str(userId[0]))
                 # select only records for particular user, only those papers liked by the current user
                 unique_user_condition = self.userId_col + "==" + str(userId[0])
                 user_dataset = dataset.filter(unique_user_condition)
@@ -426,12 +482,15 @@ class LearningToRank(Estimator, Transformer):
                 user_lsvcModel = self.train_single_SVM_model(user_dataset)
                 # add the model for the user
                 self.models[userId[0]] = user_lsvcModel
-            return self.models
+            Logger.log("Return all trained models for users. Count:" + str(len(self.models)))
         # if we have to train multiple models based on user clustering
         elif (self.model_training == "cm"):
+            Logger.log("Selecting clusters.")
             # extract all distinct clusters
             distinct_cluster_ids = self.user_clusters.select("cluster_id").distinct().collect()
+            Logger.log("Total number of users: " + str(len(distinct_cluster_ids)))
             for clusterId in distinct_cluster_ids:
+                Logger.log("Train a model for cluster id: " + str(clusterId[0]))
                 # select only users for particular cluster
                 unique_cluster_condition = "cluster_id" + "==" + str(clusterId[0])
                 # cluster
@@ -443,20 +502,23 @@ class LearningToRank(Estimator, Transformer):
                 cluster_lsvcModel = self.train_single_SVM_model(cluster_dataset)
                 # add the model for a cluster
                 self.models[clusterId[0]] = cluster_lsvcModel
+            Logger.log("Return all trained models for clusters. Count:" + str(len(self.models)))
         # Fit the model over full dataset and produce only one model for all users
         elif (self.model_training == "gm"):
+            Logger.log("Train a General Model.")
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
-            return self.models
         elif (self.model_training == "imp"):
+            Logger.log("Train multiple models in parallel.")
             # Fit the model over full data set and produce only one model,
             # it contains a map, which has an entry for each user
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
-            return self.models
+            Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
+        return self.models
 
     def train_single_SVM_model(self, dataset):
         """
@@ -465,8 +527,9 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper ids used for training
         :return: a SVM model
         """
+        Logger.log("train_single_SVM_model")
 
-        print("Train a single model.")
+        Logger.log("Peer paper Sampling.")
         # 1) Peer papers sampling
         nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
                                 userId_col=self.userId_col,
@@ -474,34 +537,21 @@ class LearningToRank(Estimator, Transformer):
 
         # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
         dataset = nps.transform(dataset)
-        # add lda paper representation to each paper based on its paper_id
-        dataset = self.paper_profiles_model.transform(dataset)
 
-        # get in which columns the result of the transform is stored
-        former_paper_output_column = self.paper_profiles_model.output_col
-        former_papeId_column = self.paper_profiles_model.paperId_col
-
-        # add lda ids paper representation for peer papers
-        self.paper_profiles_model.setPaperIdCol("peer_paper_id")
-        self.paper_profiles_model.setOutputCol("peer_paper_lda_vector")
-
-        # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
-        dataset = self.paper_profiles_model.transform(dataset)
-
+        Logger.log("Pair Paper Building.")
         # 2) pair building
         # peer_paper_lda_vector, paper_lda_vector
-        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training, self.userId_col, self.paperId_col,
+        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training,
+                                              self.paper_profiles_model,
+                                              self.userId_col, self.paperId_col,
                                               peer_paperId_col="peer_paper_id",
-                                              paper_vector_col=former_paper_output_column,
-                                              peer_paper_vector_col="peer_paper_lda_vector",
                                               output_col=self.features_col, label_col="label")
 
         # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
 
-        # drop lda vectors - not needed anymore
-        dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
         lsvcModel = None
+        Logger.log("Create Labeled Points.")
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
@@ -526,12 +576,7 @@ class LearningToRank(Estimator, Transformer):
             # Build the model
             lsvcModel = SVMWithSGD().train(labeled_data_points)
 
-        # return the default columns of the paper profiles model, the model is ready for the training
-        # of the next SVM model
-        self.paper_profiles_model.setPaperIdCol(former_papeId_column)
-        self.paper_profiles_model.setOutputCol(former_paper_output_column)
-
-        print("Training LTRModel finished.")
+        Logger.log("Training LTRModel finished.")
         return lsvcModel
 
     def _transform(self, candidate_set):
@@ -542,6 +587,7 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper profiles
         :return: dataset with predictions - column "prediction"
         """
+        Logger.log("LTR: transform.")
         predictions = None
         # format user_id, paper_id
         candidate_set = candidate_set.select(self.userId_col, F.explode("candidate_set").alias(self.paperId_col))
@@ -564,7 +610,7 @@ class LearningToRank(Estimator, Transformer):
         predictions = MLUtils.convertVectorColumnsFromML(predictions, self.features_col)
 
         if (self.model_training == "gm"): #self.Model_Training.SINGLE_MODEL_ALL_USERS):
-            print("Prediction gm ...")
+            Logger.log("Prediction gm ...")
 
             model = self.models[0]
             # set threshold to NONE to receive raw predictions from the model
@@ -573,7 +619,7 @@ class LearningToRank(Estimator, Transformer):
             predictions = predictions.toDF(predictions_scheme)
 
         elif (self.model_training == "imp"):
-            print("Predicting imp...")
+            Logger.log("Predicting imp...")
             model = self.models[0]
 
             # set threshold to NONE to receive raw predictions from the model
@@ -583,7 +629,7 @@ class LearningToRank(Estimator, Transformer):
 
         elif (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
 
-            print("Predicting ims ...")
+            Logger.log("Predicting ims ...")
             for userId, model in self.models.items():
                 # set threshold to NONE to receive raw predictions from the model
                 model._threshold = None
@@ -604,7 +650,7 @@ class LearningToRank(Estimator, Transformer):
 
 
         elif (self.model_training == "cm"):
-            print("Predicting cm ...")
+            Logger.log("Predicting cm ...")
             # add cluster id to each user - based on it, prediction are done
             users_in_cluster = self.user_clusters.withColumn(self.userId_col, F.explode("user_ids")).drop("user_ids")
             predictions = predictions.join(users_in_cluster, self.userId_col)
