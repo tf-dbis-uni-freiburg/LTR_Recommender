@@ -12,7 +12,7 @@ from pyspark.mllib.linalg import VectorUDT
 from pyspark.mllib.linalg import Vectors
 from LTR_SVM_spark2 import LTRSVMWithSGD
 from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row
-
+import sys
 from logger import Logger
 
 
@@ -117,9 +117,17 @@ class PeerPapersSampler(Transformer):
         dataset = dataset.drop("paper_id_index", "indexed_peer_paper_id")
         dataset = dataset.withColumnRenamed(self.paperId_col, self.output_col)
         dataset = dataset.withColumnRenamed("positive_paper_id", self.paperId_col)
-
         return dataset
 
+    def store_peers(self, fold_index, dataset):
+        path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
+        dataset.write.parquet(path)
+
+    def load_peers(self, spark, fold_index):
+        # Load Candidate Set
+        path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
+        peers = spark.read.parquet(path)
+        return peers
 
 class PapersPairBuilder(Transformer):
     """
@@ -451,7 +459,6 @@ class LearningToRank(Estimator, Transformer):
         self.model_training = model_training
         # data frame with format cluster_id, centroid, [user_ids] which belong to this cluster
         self.user_clusters = user_clusters
-
         # user_id, model per user
         self.models = {}
 
@@ -481,10 +488,10 @@ class LearningToRank(Estimator, Transformer):
                 # Fit the model over data for a user
                 user_lsvcModel = self.train_single_SVM_model(user_dataset)
                 # add the model for the user
-                self.models[userId[0]] = user_lsvcModel
+                self.models[userId[0]] = user_lsvcModel.weights
             Logger.log("Return all trained models for users. Count:" + str(len(self.models)))
         # if we have to train multiple models based on user clustering
-        elif (self.model_training == "cm"):
+        elif (self.model_training == "cms"):
             Logger.log("Selecting clusters.")
             # extract all distinct clusters
             distinct_cluster_ids = self.user_clusters.select("cluster_id").distinct().collect()
@@ -494,8 +501,7 @@ class LearningToRank(Estimator, Transformer):
                 # select only users for particular cluster
                 unique_cluster_condition = "cluster_id" + "==" + str(clusterId[0])
                 # cluster
-                user_cluster = self.user_clusters.filter(unique_cluster_condition)
-                users_in_cluster =  user_cluster.withColumn(self.userId_col, F.explode("user_ids")).select(self.userId_col)
+                users_in_cluster = self.user_clusters.filter(unique_cluster_condition).select(self.userId_col)
                 # select only those papers in the training set that are liked by users in the cluster
                 cluster_dataset = dataset.join(users_in_cluster, self.userId_col)
                 # Fit the model over data for a cluster based on users
@@ -515,6 +521,13 @@ class LearningToRank(Estimator, Transformer):
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
             Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
+        elif (self.model_training == "cmp"):
+            Logger.log("Train multiple clustered models in parallel.")
+            # Fit the model over full data set and produce only one model,
+            # it contains a map, which has an entry for each cluster
+            lsvcModel = self.train_single_SVM_model(dataset)
+            self.models[0] = lsvcModel
+            Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
@@ -528,16 +541,6 @@ class LearningToRank(Estimator, Transformer):
         :return: a SVM model
         """
         Logger.log("train_single_SVM_model")
-
-        Logger.log("Peer paper Sampling.")
-        # 1) Peer papers sampling
-        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
-                                userId_col=self.userId_col,
-                                output_col="peer_paper_id")
-
-        # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
-        dataset = nps.transform(dataset)
-
         Logger.log("Pair Paper Building.")
         # 2) pair building
         # peer_paper_lda_vector, paper_lda_vector
@@ -555,12 +558,28 @@ class LearningToRank(Estimator, Transformer):
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
-                # user_id | paper_id | peer_paper_id | features | label
+                # peer_paper_id | paper_id | user_id | features | label
                 # userId, label, features
-                return UserLabeledPoint(int(line[0]), line[4], line[3])
+                return UserLabeledPoint(int(line[2]), line[4], line[3])
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
+
+            # Build the model
+            lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
+        if (self.model_training == "cmp"):
+
+            # select only those papers in the training set that are liked by users in the cluster
+            cluster_dataset = dataset.join(self.user_clusters, self.userId_col)
+
+            # create User Labeled Points needed for the model
+            def createUserLabeledPoint(line):
+                # user_id | peer_paper_id | paper_id | features | label | cluster_id |
+                # clusterId, label, features
+                return UserLabeledPoint(int(line[-1]), line[4], line[3])
+
+            # convert data points data frame to RDD
+            labeled_data_points = cluster_dataset.rdd.map(createUserLabeledPoint)
 
             # Build the model
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
@@ -621,26 +640,26 @@ class LearningToRank(Estimator, Transformer):
         elif (self.model_training == "imp"):
             Logger.log("Predicting imp...")
             model = self.models[0]
-
             # set threshold to NONE to receive raw predictions from the model
             model.threshold = None
-            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model.predict(p.user_id, p.features))))
+
+            # broadcast weight vectors for all models
+            model_br = self.spark.sparkContext.broadcast(model)
+
+            predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model_br.value.predict(p.user_id, p.features))))
             predictions = predictions_rdd.toDF(predictions_scheme)
 
         elif (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
 
             Logger.log("Predicting ims ...")
-            for userId, model in self.models.items():
-                # set threshold to NONE to receive raw predictions from the model
-                model._threshold = None
 
             # broadcast weight vectors for all models
-            models_br = self.spark.sparkContext.broadcast(self.models)
+            weights_br = self.spark.sparkContext.broadcast(self.models)
 
             def predict(id, features):
-                models = models_br.value
-                model = models[id]
-                prediction = model.predict(features)
+                models = weights_br.value
+                weight = models[id]
+                prediction = weight.dot(features)
                 return float(prediction)
 
             predict_udf = F.udf(predict, FloatType())
@@ -649,7 +668,7 @@ class LearningToRank(Estimator, Transformer):
                     .select(self.userId_col, self.paperId_col, "ranking_score")
 
 
-        elif (self.model_training == "cm"):
+        elif (self.model_training == "cms"):
             Logger.log("Predicting cm ...")
             # add cluster id to each user - based on it, prediction are done
             users_in_cluster = self.user_clusters.withColumn(self.userId_col, F.explode("user_ids")).drop("user_ids")
@@ -672,6 +691,20 @@ class LearningToRank(Estimator, Transformer):
 
             predictions = predictions.withColumn("ranking_score", predict_udf("cluster_id", "features"))\
                 .select(self.userId_col, self.paperId_col, "ranking_score")
+        elif (self.model_training == "cmp"):
+            # add cluster id to each user - based on it, prediction are done
+            predictions = predictions.join(self.user_clusters, self.userId_col)
+
+            model = self.models[0]
+            # set threshold to NONE to receive raw predictions from the model
+            model.threshold = None
+
+            # broadcast weight vectors for all models
+            model_br = self.spark.sparkContext.broadcast(model)
+
+            predictions_rdd = predictions.rdd.map(
+                lambda p: (p.user_id, p.paper_id, float(model_br.value.predict(p.cluster_id, p.features))))
+            predictions = predictions_rdd.toDF(predictions_scheme)
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
