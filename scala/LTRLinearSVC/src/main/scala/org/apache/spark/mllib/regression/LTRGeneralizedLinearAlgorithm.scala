@@ -22,13 +22,13 @@ import org.apache.spark.annotation.{ DeveloperApi, Since }
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.feature.StandardScaler
 import org.apache.spark.mllib.linalg.{ Vector, Vectors }
+import org.apache.spark.mllib.optimization.LTRGradientDescent
 import org.apache.spark.mllib.optimization._
 import org.apache.spark.mllib.util.MLUtils._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.SparseVector
 import org.apache.spark.storage.StorageLevel
-
 /**
  *
  * LTRGeneralizedLinearModel (GLM) represents a model trained using
@@ -172,9 +172,6 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
     val mutableInitialWeights = collection.mutable.Map[Int, Vector]()
     val userIds = input.map(x => x.userId)
    
-    if(addIntercept){
-      
-    }
     userIds.distinct().collect().foreach(
       userId => {
         mutableInitialWeights.put(userId, Vectors.zeros(numFeatures))
@@ -236,42 +233,45 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
     // TODO: Apply feature scaling to the weight vector instead of input data.
     // data format - userId:Int, label:Double, features: Vector
     val data =
-      if (addIntercept) {
-        //TODO uncomment when feature scaling is added
-        //        if (useFeatureScaling) {
-        //          input.map(lp => (lp._1, lp._2.label, appendBias(scaler.transform(lp._2.features)))).cache()
-        //        } else {
-        input.map(lp => (lp.userId, lp.label, appendBias(lp.features))).cache()
-        //}
-      } else {
+//      if (addIntercept) {
+//        //TODO uncomment when feature scaling is added
+//        //        if (useFeatureScaling) {
+//        //          input.map(lp => (lp._1, lp._2.label, appendBias(scaler.transform(lp._2.features)))).cache()
+//        //        } else {
+//        input.map(lp => (lp.userId, lp.label, appendBias(lp.features))).cache()
+//        //}
+//      } else {
         //        if (useFeatureScaling) {
         //          input.map(lp => (lp._1, lp._2.label, scaler.transform(lp._2.features))).cache()
         //        } else {
         input.map(lp => (lp.userId, lp.label, lp.features))
         //        }
-      }
+      //}
 
     /**
      * TODO: For better convergence, in logistic regression, the intercepts should be computed
      * from the prior probability distribution of the outcomes; for linear regression,
      * the intercept should be set as the average of response.
      */
-    var initialWeightsWithIntercept = if (addIntercept) {
-      appendBiasToMap(initialWeights)
-    } else {
-      initialWeights.toMap
-    }
+    var initialWeightsWithIntercept = initialWeights.toMap
+//      if (addIntercept) {
+//      appendBiasToMap(initialWeights)
+//    } else {
+//      
+//    }
     val weightsWithIntercept = optimizer.optimize(data, initialWeightsWithIntercept)
     
     // intercept will be map[int, double] key - userId, value - intercept for this user
-    val intercept = if (addIntercept) {
-      val intercept = collection.mutable.Map[Int, Double]()
-      weightsWithIntercept foreach {
-        case (userId, weightsWithIntercept) =>
-          intercept.update(userId, weightsWithIntercept(weightsWithIntercept.size - 1))
-      }
-      intercept
-    } else {
+    val intercept 
+//    = if (addIntercept) {
+//      val intercept = collection.mutable.Map[Int, Double]()
+//      weightsWithIntercept foreach {
+//        case (userId, weightsWithIntercept) =>
+//          intercept.update(userId, weightsWithIntercept(weightsWithIntercept.size - 1))
+//      }
+//      intercept
+//    } else 
+    = {
       val intercept = collection.mutable.Map[Int, Double]()
       weightsWithIntercept foreach {
         case (userId, weightsWithIntercept) =>
@@ -282,16 +282,17 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
 
     // remove the intercept from the weights
     // weights will be map[int, vector], key - userId, value - weight vector for this user
-    var weights = if (addIntercept) {
-      val weights = collection.mutable.Map[Int, Vector]()
-      weightsWithIntercept foreach {
-        case (userId, weightsWithIntercept) =>
-          weights.update(userId, Vectors.dense(weightsWithIntercept.toArray.slice(0, weightsWithIntercept.size - 1)))
-      }
-      weights
-    } else {
+   var weights =
+     // if (addIntercept) {
+//      val weights = collection.mutable.Map[Int, Vector]()
+//      weightsWithIntercept foreach {
+//        case (userId, weightsWithIntercept) =>
+//          weights.update(userId, Vectors.dense(weightsWithIntercept.toArray.slice(0, weightsWithIntercept.size - 1)))
+//      }
+//      weights
+//    } else {
       weightsWithIntercept
-    }
+   // }
     
     /**
      * The weights and intercept are trained in the scaled space; we're converting them back to

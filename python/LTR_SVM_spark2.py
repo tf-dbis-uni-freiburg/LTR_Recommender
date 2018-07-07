@@ -5,8 +5,10 @@ from pyspark.mllib.common import _py2java, _java2py
 from pyspark.mllib.linalg import  _convert_to_vector
 from pyspark.serializers import AutoBatchedSerializer
 from pyspark.sql import DataFrame
-
 import sys
+
+from logger import Logger
+
 if sys.version >= '3':
     long = int
     unicode = str
@@ -47,7 +49,7 @@ class LTRSVMModel():
        For each user in the trained data set, there is an entry in both maps.
        These entries contain model information for a particular user. If a prediction
        needs to be done, it depends on the user id which a paper is connected to.
-       """
+    """
 
     def __init__(self, weights, intercept):
         self.modelWeights = {}
@@ -87,7 +89,7 @@ class LTRSVMModel():
 class LTRSVMWithSGD(object):
 
     def train(cls, data, iterations=100, step=1.0, regParam=0.01,
-              miniBatchFraction=1.0, regType="l2", intercept=False, validateData=True, convergenceTol=0.001):
+              miniBatchFraction=1.0, regType="l2", intercept=False, validateData=False, convergenceTol=0.001):
         """
         Train a support vector machine on the given data.
 

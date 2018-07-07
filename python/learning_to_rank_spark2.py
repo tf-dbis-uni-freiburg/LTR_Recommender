@@ -2,6 +2,9 @@ from pyspark.ml.base import Estimator
 from pyspark.mllib.classification import SVMWithSGD
 from pyspark.mllib.regression import LabeledPoint
 import numpy
+import time
+import csv
+import datetime
 from pyspark.mllib.util import MLUtils
 import pyspark.sql.functions as F
 from random import randint
@@ -285,7 +288,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
             negative_class_dataset = self.vectorizer_model.transform(negative_class_dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -473,22 +476,70 @@ class LearningToRank(Estimator, Transformer):
         that a user likes in the training set.
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
+        # load peers so you can remove the randomization factor when comparing
+        # # 1) Peer papers sampling
+        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
+                                userId_col=self.userId_col,
+                                output_col="peer_paper_id")
+
+        # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
+        peers_dataset = nps.transform(dataset)
+
+        # peer_paper_lda_vector, paper_lda_vector
+        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training,
+                                              self.paper_profiles_model,
+                                              self.userId_col, self.paperId_col,
+                                              peer_paperId_col="peer_paper_id",
+                                              output_col=self.features_col,
+                                              label_col="label")
+        # 2) pair building
+        # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+        dataset = papersPairBuilder.transform(peers_dataset)
+        dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
+
         # train multiple models, one for each user in the data set
         if (self.model_training == "ims"):
+            avg_user_training_time = 0
+            avg_user_partitions = 0
+            avg_user_rows = 0
+            start_time = datetime.datetime.now()
             Logger.log("Selecting users.")
             # extract all distinct users
             distinct_user_ids = dataset.select(self.userId_col).distinct().collect()
+            Logger.log(str(distinct_user_ids))
+            end_time = datetime.datetime.now() - start_time
             Logger.log("Total number of users: " + str(len(distinct_user_ids)))
+            Logger.log("Time for collecting users: " + str(end_time.total_seconds()))
             # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
+                results = []
                 Logger.log("Train a model for user id: " + str(userId[0]))
+                start_time = datetime.datetime.now()
                 # select only records for particular user, only those papers liked by the current user
                 unique_user_condition = self.userId_col + "==" + str(userId[0])
                 user_dataset = dataset.filter(unique_user_condition)
-                # Fit the model over data for a user
-                user_lsvcModel = self.train_single_SVM_model(user_dataset)
+                lsvcModel = self.train_single_SVM_model(user_dataset)
                 # add the model for the user
-                self.models[userId[0]] = user_lsvcModel.weights
+                Logger.log("Add key " + str(userId[0]) + " to the map.")
+                self.models[int(userId[0])] = lsvcModel.weights
+                time_to_train= (datetime.datetime.now() - start_time).total_seconds()
+                results.append(time_to_train)
+                #Logger.log("Time for training for user " + str(userId[0]) + ": " + str(time_to_train))
+                rows_per_user = user_dataset.count()
+                results.append(rows_per_user)
+                avg_user_rows += rows_per_user
+                Logger.log("Number of rows per user " + str(userId[0]) + ": " + str(rows_per_user))
+                partitions_per_user = user_dataset.rdd.getNumPartitions()
+                results.append(partitions_per_user)
+                avg_user_partitions += partitions_per_user
+                Logger.log("Number of partitions " + str(userId[0]) + ": " + str(partitions_per_user))
+                avg_user_training_time += time_to_train
+                # with open("ims-stats.csv", 'a') as csvfile:
+                #     writer = csv.writer(csvfile)
+                #     writer.writerow(results)
+            Logger.log("Average time to train a model per user:" + str(float(avg_user_training_time/len(distinct_user_ids))))
+            Logger.log("Average rows per user:" + str(float(avg_user_rows / len(distinct_user_ids))))
+            Logger.log("Average partitions per user:" + str(float(avg_user_partitions / len(distinct_user_ids))))
             Logger.log("Return all trained models for users. Count:" + str(len(self.models)))
         # if we have to train multiple models based on user clustering
         elif (self.model_training == "cms"):
@@ -516,10 +567,15 @@ class LearningToRank(Estimator, Transformer):
             self.models[0] = lsvcModel
         elif (self.model_training == "imp"):
             Logger.log("Train multiple models in parallel.")
+            start_time = datetime.datetime.now()
             # Fit the model over full data set and produce only one model,
             # it contains a map, which has an entry for each user
             lsvcModel = self.train_single_SVM_model(dataset)
+            end_time = datetime.datetime.now() - start_time
             self.models[0] = lsvcModel
+            Logger.log("Time to train a IMP model over all users:" + str(end_time.total_seconds()))
+            Logger.log("Rows for all users:" + str(dataset.count()))
+            Logger.log("Number of partitions " + str((dataset.rdd.getNumPartitions())))
             Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
         elif (self.model_training == "cmp"):
             Logger.log("Train multiple clustered models in parallel.")
@@ -540,20 +596,8 @@ class LearningToRank(Estimator, Transformer):
         :param dataset: paper ids used for training
         :return: a SVM model
         """
+
         Logger.log("train_single_SVM_model")
-        Logger.log("Pair Paper Building.")
-        # 2) pair building
-        # peer_paper_lda_vector, paper_lda_vector
-        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training,
-                                              self.paper_profiles_model,
-                                              self.userId_col, self.paperId_col,
-                                              peer_paperId_col="peer_paper_id",
-                                              output_col=self.features_col, label_col="label")
-
-        # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
-        dataset = papersPairBuilder.transform(dataset)
-
-        lsvcModel = None
         Logger.log("Create Labeled Points.")
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
@@ -564,11 +608,11 @@ class LearningToRank(Estimator, Transformer):
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
-
             # Build the model
-            lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
+            # TODO remove this - only for testing
+            lsvcModel = LTRSVMWithSGD().train(labeled_data_points, intercept=False, validateData=False)
+            return lsvcModel
         if (self.model_training == "cmp"):
-
             # select only those papers in the training set that are liked by users in the cluster
             cluster_dataset = dataset.join(self.user_clusters, self.userId_col)
 
@@ -582,21 +626,21 @@ class LearningToRank(Estimator, Transformer):
             labeled_data_points = cluster_dataset.rdd.map(createUserLabeledPoint)
 
             # Build the model
-            lsvcModel = LTRSVMWithSGD().train(labeled_data_points)
+            lsvcModel = LTRSVMWithSGD().train(labeled_data_points, validateData=False, intercept=False)
+            return lsvcModel
         else:
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
                 # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
                 return LabeledPoint(line[-1], line[-2])
-
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
-            # Build the model
-            lsvcModel = SVMWithSGD().train(labeled_data_points)
 
+            # Build the model
+            lsvcModel = SVMWithSGD().train(labeled_data_points, validateData=False, intercept=False)
+            return lsvcModel
         Logger.log("Training LTRModel finished.")
-        return lsvcModel
 
     def _transform(self, candidate_set):
         """
@@ -657,8 +701,8 @@ class LearningToRank(Estimator, Transformer):
             weights_br = self.spark.sparkContext.broadcast(self.models)
 
             def predict(id, features):
-                models = weights_br.value
-                weight = models[id]
+                weights = weights_br.value
+                weight = weights[int(id)]
                 prediction = weight.dot(features)
                 return float(prediction)
 

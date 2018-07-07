@@ -345,9 +345,10 @@ class LDAVectorizer(Estimator):
         tfVectorizerModel = tfVectorizer.fit(papers)
         # paper_id | tf_vector
         papers_tf_vectors = tfVectorizerModel.transform(papers).select(self.paperId_col, "tf_vector")
+        papers_tf_vectors.cache()
         Logger.log("Train LDA. Topics:" + str(self.k_topics))
         # Trains a LDA model.
-        # The number of topics(clusters) to infer. Must be > 1.
+        # The number of topics to infer. Must be > 1.
         lda = LDA(featuresCol = "tf_vector", k = self.k_topics)
         model = lda.fit(papers_tf_vectors)
 
@@ -356,6 +357,7 @@ class LDAVectorizer(Estimator):
         papers_lda_vectors = model.transform(papers_tf_vectors).withColumnRenamed("topicDistribution", self.output_col).drop("tf_vector")
 
         Logger.log("Return LDA model.")
+        papers_tf_vectors.unpersist()
         return LDAModel(papers_lda_vectors, self.paperId_col, self.output_col);
 
 class LDAModel(Transformer):
