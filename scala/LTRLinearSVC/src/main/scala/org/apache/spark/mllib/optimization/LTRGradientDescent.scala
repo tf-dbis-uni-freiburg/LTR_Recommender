@@ -8,7 +8,6 @@ import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg.{ Vector, Vectors }
 import org.apache.spark.rdd.RDD
-import org.apache.spark.mllib.linalg.DenseVector
 
 /**
  * Class used to solve an optimization problem using Gradient Descent.
@@ -200,7 +199,7 @@ object LTRGradientDescent extends Logging {
 
     // Initialize weights as a column vector
     // convert vectors to dense vectors
-    var weights = collection.mutable.Map[Int, Vector]()
+    var weights = collection.mutable.HashMap[Int, Vector]()
     initialWeights foreach {
       case (userId, vector) =>
         weights.put(userId, Vectors.dense(vector.toArray))
@@ -212,7 +211,7 @@ object LTRGradientDescent extends Logging {
      * For the first iteration, the regVal will be initialized as sum of weight squares
      * if it's L2 updater; for L1 updater, the same logic is followed.
      */
-    var regVal = scala.collection.mutable.Map[Int, Double]()
+    var regVal = scala.collection.mutable.HashMap[Int, Double]()
     weights foreach {
       case (userId, userWeights) =>
         var userRegVal = updater.compute(userWeights, Vectors.zeros(userWeights.size), 0, 1, regParam)._2
@@ -221,7 +220,7 @@ object LTRGradientDescent extends Logging {
 
     // store userId, true - if the weights for this users are not changing
     // contains only those user ids for which the model converged
-    var converged = scala.collection.mutable.Map[Int, Boolean]()
+    var converged = scala.collection.mutable.HashMap[Int, Boolean]()
     var i = 1
 
     // if for all users, their model converged, do not continue computation
@@ -234,55 +233,39 @@ object LTRGradientDescent extends Logging {
 
       // compute and sum up the subgradients on this subset (this is one map-reduce)
       // gradientSum - map[int, vector] for each user
-      var zeroGradientSum = collection.mutable.Map[Int, breeze.linalg.DenseVector[Double]]()
-      weights.foreach {
-        case (userId, vector) =>
-          // add only those user id which model/weight vector is not converged yet
-          if (!converged.contains(userId)) {
-            zeroGradientSum.put(userId, BDV.zeros[Double](nFeatures))
-          }
-      }
+      var zeroGradientSum = collection.mutable.HashMap[Int, BDV[Double]]()
 
       // lossSum - map[int, double] for each user
-      var zeroLossSum = collection.mutable.Map[Int, Double]()
-      weights.foreach {
-        case (userId, vector) =>
-          // add only those user id which model/weight vector is not converged yet
-          if (!converged.contains(userId)) {
-            zeroLossSum.put(userId, 0.0)
-          }
-      }
+      var zeroLossSum = collection.mutable.HashMap[Int, Double]()
 
       // zeroSamplesPerUser - map[int, int] for each user
-      var zeroSamplesCountPerUser = collection.mutable.Map[Int, Int]()
-      weights.foreach {
-        case (userId, vector) =>
-          // add only those user id which model/weight vector is not converged yet
-          if (!converged.contains(userId)) {
-            zeroSamplesCountPerUser.put(userId, 0)
-          }
-      }
+      var zeroSamplesCountPerUser = collection.mutable.HashMap[Int, Long]()
 
-      val (gradientSum, lossSum, samplesCountPerUser) = data
-        .treeAggregate((zeroGradientSum, zeroLossSum, zeroSamplesCountPerUser))(
+      val (gradientSum, lossSum, samplesCountPerUser) = data.
+        treeAggregate((zeroGradientSum, zeroLossSum, zeroSamplesCountPerUser))(
           seqOp = (c, v) => {
+            // c: (grad, loss, countPerUser), v: (userId, label, features)
             var isUserConverged = bcConverged.value.contains(v._1)
             if (!isUserConverged) {
-              // c: (grad, loss, countPerUser), v: (userId, label, features)
               val localUserWeight = bcWeights.value.get(v._1)
               // gradient: Vector, loss: Double
-              val l = gradient.compute(v._3, v._2, localUserWeight.get)
-              // update user gradient
-              var localUserGradient = c._1.get(v._1).get
-              var currentGradientSum = l._1.asBreeze
-              localUserGradient += currentGradientSum
-              c._1.put(v._1, localUserGradient)
-              // update user loss
-              val localUserLoss = c._2.get(v._1).get
-              c._2.put(v._1, localUserLoss + l._2)
-              // update how many examples we encounter per user
-              val samplesCountPerUser = c._3.get(v._1).get
-              c._3.put(v._1, samplesCountPerUser + 1)
+              if(c._1.contains(v._1)){
+                // data, label, weights: Vector, cumGradient: Vector
+                val l = gradient.compute(v._3, v._2, localUserWeight.get , Vectors.fromBreeze(c._1.get(v._1).get))
+                // update user loss
+                val localUserLoss = c._2.get(v._1).get
+                c._2.put(v._1, localUserLoss + l)
+                // update how many examples we encounter per user
+                val samplesCountPerUser = c._3.get(v._1).get
+                c._3.put(v._1, samplesCountPerUser + 1)
+              } else {
+                 // data, label, weights: Vector, cumGradient: Vector
+                val l = gradient.compute(v._3, v._2, localUserWeight.get)
+                // update user loss
+                c._1.put(v._1, l._1.asBreeze.toDenseVector)
+                c._2.put(v._1,l._2)
+                c._3.put(v._1, 1)
+              }
             }
             (c._1, c._2, c._3)
           },
@@ -305,10 +288,14 @@ object LTRGradientDescent extends Logging {
             // merge two maps that contains loss
             c2._2 foreach {
               case (userId, loss) =>
-                val c1loss = c1._2.get(userId).get
-                c1._2.put(userId, c1loss + loss)
+               if (c1._2.contains(userId)) {
+                  val c1loss = c1._2.get(userId).get
+                  c1._2.put(userId, c1loss + loss)
+                } else {
+                  c1._2.put(userId, loss)
+                }
             }
-
+              
             c2._3 foreach {
               case (userId, count) =>
                 if (c1._3.contains(userId)) {
@@ -318,10 +305,12 @@ object LTRGradientDescent extends Logging {
                   c1._3.put(userId, count)
                 }
             }
-
             (c1._1, c1._2, c1._3)
           })
-
+          
+      bcWeights.destroy()
+      bcConverged.destroy()
+      
       if (numExamples > 0) {
         /**
          * lossSum is computed using the weights from the previous iteration
@@ -330,9 +319,10 @@ object LTRGradientDescent extends Logging {
         var currentStochasticLossHistory = collection.mutable.Map[Int, Double]()
         lossSum foreach {
           case (userId, userLossSum) =>
-            val userRegVal = regVal.get(userId).getOrElse(0.0)
+            val userRegVal = regVal.get(userId).get
             val userSampleSize = samplesCountPerUser.get(userId).get
-            currentStochasticLossHistory.put(userId, userLossSum / userSampleSize + userRegVal)
+            val loss = userLossSum / userSampleSize
+            currentStochasticLossHistory.put(userId, loss + userRegVal)
         }
         stochasticLossHistory += currentStochasticLossHistory
 
@@ -371,7 +361,8 @@ object LTRGradientDescent extends Logging {
 
     println("GradientDescent.runMiniBatchSGD finished. Last 10 stochastic losses %s".format(
       stochasticLossHistory.takeRight(10).mkString(", ")))
-
+    println(weights)
+    println(weights.toMap)
     (weights.toMap, stochasticLossHistory.toArray)
 
   }

@@ -202,76 +202,19 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
       println("The input data is not directly cached, which may hurt performance if its"
         + " parent RDDs are also uncached.")
     }
-
-    /**
-     * Scaling columns to unit variance as a heuristic to reduce the condition number:
-     *
-     * During the optimization process, the convergence (rate) depends on the condition number of
-     * the training data set. Scaling the variables often reduces this condition number
-     * heuristically, thus improving the convergence rate. Without reducing the condition number,
-     * some training data sets mixing the columns with different scales may not be able to converge.
-     *
-     * GLMNET and LIBSVM packages perform the scaling to reduce the condition number, and return
-     * the weights in the original scale.
-     * See page 9 in http://cran.r-project.org/web/packages/glmnet/glmnet.pdf
-     *
-     * Here, if useFeatureScaling is enabled, we will standardize the training features by dividing
-     * the variance of each column (without subtracting the mean), and train the model in the
-     * scaled space. Then we transform the coefficients from the scaled space to the original scale
-     * as GLMNET and LIBSVM do.
-     *
-     * Currently, it's only enabled in LogisticRegressionWithLBFGS
-     */
-    // TODO rewrite the scaler StandartScaler Class
-    // val scaler = if (useFeatureScaling) {
-    //   new StandardScaler(withStd = true, withMean = false).fit(input.map(lp => lp._2.features))
-    // } else {
-    //   null
-    // }
-
-    // Prepend an extra variable consisting of all 1.0's for the intercept.
-    // TODO: Apply feature scaling to the weight vector instead of input data.
-    // data format - userId:Int, label:Double, features: Vector
-    val data =
-//      if (addIntercept) {
-//        //TODO uncomment when feature scaling is added
-//        //        if (useFeatureScaling) {
-//        //          input.map(lp => (lp._1, lp._2.label, appendBias(scaler.transform(lp._2.features)))).cache()
-//        //        } else {
-//        input.map(lp => (lp.userId, lp.label, appendBias(lp.features))).cache()
-//        //}
-//      } else {
-        //        if (useFeatureScaling) {
-        //          input.map(lp => (lp._1, lp._2.label, scaler.transform(lp._2.features))).cache()
-        //        } else {
-        input.map(lp => (lp.userId, lp.label, lp.features))
-        //        }
-      //}
-
+    
+    val data = input.map(lp => (lp.userId, lp.label, lp.features))
+   
     /**
      * TODO: For better convergence, in logistic regression, the intercepts should be computed
      * from the prior probability distribution of the outcomes; for linear regression,
      * the intercept should be set as the average of response.
      */
     var initialWeightsWithIntercept = initialWeights.toMap
-//      if (addIntercept) {
-//      appendBiasToMap(initialWeights)
-//    } else {
-//      
-//    }
     val weightsWithIntercept = optimizer.optimize(data, initialWeightsWithIntercept)
     
     // intercept will be map[int, double] key - userId, value - intercept for this user
-    val intercept 
-//    = if (addIntercept) {
-//      val intercept = collection.mutable.Map[Int, Double]()
-//      weightsWithIntercept foreach {
-//        case (userId, weightsWithIntercept) =>
-//          intercept.update(userId, weightsWithIntercept(weightsWithIntercept.size - 1))
-//      }
-//      intercept
-//    } else 
-    = {
+    val intercept = {
       val intercept = collection.mutable.Map[Int, Double]()
       weightsWithIntercept foreach {
         case (userId, weightsWithIntercept) =>
@@ -282,55 +225,7 @@ abstract class LTRGeneralizedLinearAlgorithm[M <: LTRGeneralizedLinearModel]
 
     // remove the intercept from the weights
     // weights will be map[int, vector], key - userId, value - weight vector for this user
-   var weights =
-     // if (addIntercept) {
-//      val weights = collection.mutable.Map[Int, Vector]()
-//      weightsWithIntercept foreach {
-//        case (userId, weightsWithIntercept) =>
-//          weights.update(userId, Vectors.dense(weightsWithIntercept.toArray.slice(0, weightsWithIntercept.size - 1)))
-//      }
-//      weights
-//    } else {
-      weightsWithIntercept
-   // }
-    
-    /**
-     * The weights and intercept are trained in the scaled space; we're converting them back to
-     * the original scale.
-     *
-     * Math shows that if we only perform standardization without subtracting means, the intercept
-     * will not be changed. w_i = w_i' / v_i where w_i' is the coefficient in the scaled space, w_i
-     * is the coefficient in the original space, and v_i is the variance of the column i.
-     */
-    // TODO when I fix the scaler, uncomment
-    //    if (useFeatureScaling) {
-    //      if (numOfLinearPredictor == 1) {
-    //
-    //        //weights = scaler.transform(weights)
-    //      }
-    //      // TODO numOfLinearPredictor in our case is always 1, TODO check this
-    //       else {
-    //        /**
-    //         * For `numOfLinearPredictor > 1`, we have to transform the weights back to the original
-    //         * scale for each set of linear predictor. Note that the intercepts have to be explicitly
-    //         * excluded when `addIntercept == true` since the intercepts are part of weights now.
-    //         */
-    //        var i = 0
-    //        val n = weights.size / numOfLinearPredictor
-    //        val weightsArray = weights.toArray
-    //        while (i < numOfLinearPredictor) {
-    //          val start = i * n
-    //          val end = (i + 1) * n - { if (addIntercept) 1 else 0 }
-    //
-    //          val partialWeightsArray = scaler.transform(
-    //            Vectors.dense(weightsArray.slice(start, end))).toArray
-    //
-    //          System.arraycopy(partialWeightsArray, 0, weightsArray, start, partialWeightsArray.length)
-    //          i += 1
-    //        }
-    //        weights = Vectors.dense(weightsArray)
-    //      }
-    //    }
+   var weights = weightsWithIntercept
 
     // Warn at the end of the run as well, for increased visibility.
     if (input.getStorageLevel == StorageLevel.NONE) {
