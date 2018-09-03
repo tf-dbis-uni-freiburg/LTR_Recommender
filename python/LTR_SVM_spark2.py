@@ -7,8 +7,6 @@ from pyspark.serializers import AutoBatchedSerializer
 from pyspark.sql import DataFrame
 import sys
 
-from logger import Logger
-
 if sys.version >= '3':
     long = int
     unicode = str

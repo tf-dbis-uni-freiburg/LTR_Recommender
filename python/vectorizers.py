@@ -316,7 +316,6 @@ class LDAVectorizer(Estimator):
         self.tf_map_col = tf_map_col
         self.output_col = output_col
 
-
     def setPaperIdCol(self, paperId_col):
         self.paperId_col = paperId_col
 
@@ -353,7 +352,7 @@ class LDAVectorizer(Estimator):
         model = lda.fit(papers_tf_vectors)
 
         Logger.log("Transform LDA over paper corpus.")
-        # paper_id | lda_vector
+        # format -> paper_id | lda_vector
         papers_lda_vectors = model.transform(papers_tf_vectors).withColumnRenamed("topicDistribution", self.output_col).drop("tf_vector")
 
         Logger.log("Return LDA model.")
@@ -405,7 +404,7 @@ class LDAModel(Transformer):
         :param dataset: input data with a column paperId_col. Based on it, a lda vector for each paper is added.
         :return: data frame with additional column output_col
         """
-        Logger.log("LTR LDA model transform method called.")
+        Logger.log("LTR LDA model transform method.")
         dataset = dataset.join(self.paper_profiles, self.paperId_col);
         return dataset
 

@@ -5,6 +5,7 @@ import numpy
 import time
 import csv
 import datetime
+import threading
 from pyspark.mllib.util import MLUtils
 import pyspark.sql.functions as F
 from random import randint
@@ -145,20 +146,6 @@ class PapersPairBuilder(Transformer):
     be computed and added with class 1. And for the other 50%, (p_p - p) with class 0.
     """
 
-    # class Pairs_Generation(Enum):
-    #     """
-    #     Enum that contains different approaches for generating pairs.
-    #     There are three possible values: duplicated_pairs, one_class_pairs,
-    #     equally_distributed_pairs. For example, if we have a paper p, and a set of peer papers N for the paper p
-    #     1) DUPLICATED_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1) and
-    #         (p_p - p, class: 0)
-    #     2) ONE_CLASS_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1)
-    #     3) EQUALLY_DISTRIBUTED_PAIRS - for 50% of papers in the set N, calculate (p - p_p, class:1),
-    #     and for the other 50% (p_p - p, class: 0)
-    #     """
-    #     DUPLICATED_PAIRS = 0
-    #     ONE_CLASS_PAIRS = 1
-    #     EQUALLY_DISTRIBUTED_PAIRS = 2
 
     def __init__(self, pairs_generation, model_training, vectorizer_model, userId_col="user_id",
                  paperId_col="paper_id", peer_paperId_col="peer_paper_id",
@@ -256,7 +243,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
             positive_class_dataset = self.vectorizer_model.transform(positive_class_dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -396,23 +383,8 @@ class LearningToRank(Estimator, Transformer):
 
     """
 
-    # class Model_Training(Enum):
-    #     """
-    #     Enum that contains different training approaches for LTR.
-    #     """
-    #
-    #     """ Train one model per user. Number of models is equal to number of users.
-    #     Each model will be trained only over papers that are liked by particular user. """
-    #     GENERAL_MODEL = 0
-    #
-    #     """
-    #     Train only one model based on all users. The model won't be so personalized, we will have more
-    #     general model. But the cost of training is less compared to GENERAL_MODEL.
-    #     """
-    #     INDIVIDUAL MODEL SEQUENTIAL = 1
-
     def __init__(self, spark, papers_corpus, paper_profiles_model, user_clusters=None, model_training= "gm",
-                 pairs_generation= "edp" , peer_papers_count=10,
+                 pairs_generation= "edp" ,
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.
@@ -420,7 +392,7 @@ class LearningToRank(Estimator, Transformer):
         :param spark spark instance, used for creating a data frame of user ids
         :param papers_corpus: PapersCorpus object that contains data frame. It represents all papers from the corpus. 
         Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information. It is used
-        during the first phase of the algorihtm when sampling of peer papers is done.
+        during the first phase of the algorithm when sampling of peer papers is done.
 
         :param paper_profiles_model: a model that can produce a representation for each paper is used. For example, 
         TFIDFVectorizorModel can add a tf-idf vector based on input paper id. Such a model is used for adding a
@@ -455,7 +427,6 @@ class LearningToRank(Estimator, Transformer):
         self.papers_corpus = papers_corpus
         self.paper_profiles_model = paper_profiles_model
         self.pairs_generation = pairs_generation
-        self.peer_papers_count = peer_papers_count
         self.paperId_col = paperId_col
         self.userId_col = userId_col
         self.features_col = features_col
@@ -476,16 +447,7 @@ class LearningToRank(Estimator, Transformer):
         that a user likes in the training set.
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
-        # load peers so you can remove the randomization factor when comparing
-        # # 1) Peer papers sampling
-        nps = PeerPapersSampler(self.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
-                                userId_col=self.userId_col,
-                                output_col="peer_paper_id")
 
-        # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
-        peers_dataset = nps.transform(dataset)
-
-        # peer_paper_lda_vector, paper_lda_vector
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training,
                                               self.paper_profiles_model,
                                               self.userId_col, self.paperId_col,
@@ -493,26 +455,20 @@ class LearningToRank(Estimator, Transformer):
                                               output_col=self.features_col,
                                               label_col="label")
         # 2) pair building
-        # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
-        dataset = papersPairBuilder.transform(peers_dataset)
+        # format -> paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+        dataset = papersPairBuilder.transform(dataset)
         dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
-
         # train multiple models, one for each user in the data set
         if (self.model_training == "ims"):
-            avg_user_training_time = 0
-            avg_user_partitions = 0
-            avg_user_rows = 0
+
             start_time = datetime.datetime.now()
             Logger.log("Selecting users.")
             # extract all distinct users
             distinct_user_ids = dataset.select(self.userId_col).distinct().collect()
-            Logger.log(str(distinct_user_ids))
             end_time = datetime.datetime.now() - start_time
             Logger.log("Total number of users: " + str(len(distinct_user_ids)))
             Logger.log("Time for collecting users: " + str(end_time.total_seconds()))
-            # train a model for each user, simply by for loop over all users
             for userId in distinct_user_ids:
-                results = []
                 Logger.log("Train a model for user id: " + str(userId[0]))
                 start_time = datetime.datetime.now()
                 # select only records for particular user, only those papers liked by the current user
@@ -522,24 +478,8 @@ class LearningToRank(Estimator, Transformer):
                 # add the model for the user
                 Logger.log("Add key " + str(userId[0]) + " to the map.")
                 self.models[int(userId[0])] = lsvcModel.weights
-                time_to_train= (datetime.datetime.now() - start_time).total_seconds()
-                results.append(time_to_train)
-                #Logger.log("Time for training for user " + str(userId[0]) + ": " + str(time_to_train))
-                rows_per_user = user_dataset.count()
-                results.append(rows_per_user)
-                avg_user_rows += rows_per_user
-                Logger.log("Number of rows per user " + str(userId[0]) + ": " + str(rows_per_user))
-                partitions_per_user = user_dataset.rdd.getNumPartitions()
-                results.append(partitions_per_user)
-                avg_user_partitions += partitions_per_user
-                Logger.log("Number of partitions " + str(userId[0]) + ": " + str(partitions_per_user))
-                avg_user_training_time += time_to_train
-                # with open("ims-stats.csv", 'a') as csvfile:
-                #     writer = csv.writer(csvfile)
-                #     writer.writerow(results)
-            Logger.log("Average time to train a model per user:" + str(float(avg_user_training_time/len(distinct_user_ids))))
-            Logger.log("Average rows per user:" + str(float(avg_user_rows / len(distinct_user_ids))))
-            Logger.log("Average partitions per user:" + str(float(avg_user_partitions / len(distinct_user_ids))))
+                time_to_train = (datetime.datetime.now() - start_time).total_seconds()
+                Logger.log("Time for training for user " + str(userId[0]) + ": " + str(time_to_train))
             Logger.log("Return all trained models for users. Count:" + str(len(self.models)))
         # if we have to train multiple models based on user clustering
         elif (self.model_training == "cms"):
@@ -574,8 +514,6 @@ class LearningToRank(Estimator, Transformer):
             end_time = datetime.datetime.now() - start_time
             self.models[0] = lsvcModel
             Logger.log("Time to train a IMP model over all users:" + str(end_time.total_seconds()))
-            Logger.log("Rows for all users:" + str(dataset.count()))
-            Logger.log("Number of partitions " + str((dataset.rdd.getNumPartitions())))
             Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
         elif (self.model_training == "cmp"):
             Logger.log("Train multiple clustered models in parallel.")
@@ -583,7 +521,7 @@ class LearningToRank(Estimator, Transformer):
             # it contains a map, which has an entry for each cluster
             lsvcModel = self.train_single_SVM_model(dataset)
             self.models[0] = lsvcModel
-            Logger.log("Return all trained models. Count:" + str(len(self.models[0].modelWeights)))
+            Logger.log("Return all trained models. Count:" + str(len(lsvcModel.modelWeights)))
         else:
             # throw an error - unsupported option
             raise ValueError('The option' + self.model_training + ' is not supported.')
@@ -598,7 +536,6 @@ class LearningToRank(Estimator, Transformer):
         """
 
         Logger.log("train_single_SVM_model")
-        Logger.log("Create Labeled Points.")
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
             def createUserLabeledPoint(line):
@@ -608,8 +545,8 @@ class LearningToRank(Estimator, Transformer):
 
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
+            Logger.log("Number of partitions for labeled data points: " + str(labeled_data_points.getNumPartitions()))
             # Build the model
-            # TODO remove this - only for testing
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points, intercept=False, validateData=False)
             return lsvcModel
         if (self.model_training == "cmp"):
@@ -634,15 +571,16 @@ class LearningToRank(Estimator, Transformer):
                 # label, features
                 # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
                 return LabeledPoint(line[-1], line[-2])
+
             # convert data points data frame to RDD
             labeled_data_points = dataset.rdd.map(createLabelPoint)
-
             # Build the model
             lsvcModel = SVMWithSGD().train(labeled_data_points, validateData=False, intercept=False)
+
             return lsvcModel
         Logger.log("Training LTRModel finished.")
 
-    def _transform(self, candidate_set):
+    def transform(self, candidate_set):
         """
         TODO change comments
         Add prediction to each paper in the input data set based on the trained model and its features vector.
@@ -693,7 +631,7 @@ class LearningToRank(Estimator, Transformer):
             predictions_rdd = predictions.rdd.map(lambda p: (p.user_id, p.paper_id, float(model_br.value.predict(p.user_id, p.features))))
             predictions = predictions_rdd.toDF(predictions_scheme)
 
-        elif (self.model_training == "ims"): #self.Model_Training.MODEL_PER_USER):
+        elif (self.model_training == "ims"):
 
             Logger.log("Predicting ims ...")
 
@@ -711,9 +649,8 @@ class LearningToRank(Estimator, Transformer):
             predictions = predictions.withColumn("ranking_score", predict_udf("user_id", "features")) \
                     .select(self.userId_col, self.paperId_col, "ranking_score")
 
-
         elif (self.model_training == "cms"):
-            Logger.log("Predicting cm ...")
+            Logger.log("Predicting cms ...")
             # add cluster id to each user - based on it, prediction are done
             users_in_cluster = self.user_clusters.withColumn(self.userId_col, F.explode("user_ids")).drop("user_ids")
             predictions = predictions.join(users_in_cluster, self.userId_col)
@@ -736,13 +673,13 @@ class LearningToRank(Estimator, Transformer):
             predictions = predictions.withColumn("ranking_score", predict_udf("cluster_id", "features"))\
                 .select(self.userId_col, self.paperId_col, "ranking_score")
         elif (self.model_training == "cmp"):
+            # format user_id, paper_id, feature
             # add cluster id to each user - based on it, prediction are done
             predictions = predictions.join(self.user_clusters, self.userId_col)
-
             model = self.models[0]
+
             # set threshold to NONE to receive raw predictions from the model
             model.threshold = None
-
             # broadcast weight vectors for all models
             model_br = self.spark.sparkContext.broadcast(model)
 

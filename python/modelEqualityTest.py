@@ -17,7 +17,7 @@ class EqualityTest():
     def IMPvsIMS(self):
         Logger.log("Equality test for IMP vs IMS...")
         start_time = datetime.datetime.now()
-        for i in range(1, 6):
+        for i in range(1, 5):
             fold = FoldValidator().load_fold(self.spark, i)
 
             # drop some unneeded columns
@@ -44,13 +44,13 @@ class EqualityTest():
             # test only for 10 random users
             user_ids = peers_dataset.select("user_id").distinct().collect()
             shuffle(user_ids)
-            user_ids = user_ids[:50]
+            user_ids = user_ids[:10]
             Logger.log("Test for " + str(len(user_ids))+ " user/s")
 
             filter_condition = "user_id ==" + str(user_ids[0][0])
             for user_id in user_ids[1:]:
                 filter_condition += " or user_id ==" + str(user_id[0])
-            test_peer_paper = peers_dataset.filter(filter_condition)
+                peers_dataset = peers_dataset.filter(filter_condition)
 
             # peer_paper_lda_vector, paper_lda_vector
             papersPairBuilder = PapersPairBuilder(self.pairs_generation, "ims",
@@ -60,8 +60,8 @@ class EqualityTest():
                                                       output_col="features",
                                                       label_col="label")
             # 2) pair building
-            # paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
-            dataset = papersPairBuilder.transform(test_peer_paper)
+            # format -> paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+            dataset = papersPairBuilder.transform(peers_dataset)
             dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
             dataset.persist()
 
