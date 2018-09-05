@@ -27,6 +27,7 @@ class UDFContainer():
         self.recall_per_user = F.udf(UDFContainer.__recall_per_user, DoubleType())
         self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
         self.calculate_prediction = F.udf(UDFContainer.__calculate_prediction, FloatType())
+        self.random_divide = F.udf(UDFContainer.__random_divide, ArrayType(ArrayType(IntegerType())))
 
     @staticmethod
     def getInstance():
@@ -173,6 +174,23 @@ class UDFContainer():
         return self.calculate_prediction(features, coefficients)
 
     ### Private Functions ###
+
+    def __random_divide(lst, k):
+        """
+        Randomly splits the items of a given list into k lists
+        :param lst: the input list
+        :param k: the number of resulting lists
+        :return: 2d list
+        """
+        res = []
+        shuffle(lst)
+        partition_size = len(lst) // k
+        for fold in range(k):
+            if fold == k - 1:
+                res.append(lst[fold * partition_size:len(lst)])
+            else:
+                res.append(lst[fold * partition_size:fold * partition_size + partition_size])
+        return res
 
     def __build_publication_date(year, month):
         """

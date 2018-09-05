@@ -1,6 +1,7 @@
 from pyspark.sql import functions as F
 import csv
 from pyspark.sql import Row
+from spark_utils import UDFContainer
 from logger import Logger
 from paper_corpus_builder import PaperCorpusBuilder, PapersCorpus
 from vectorizers import *
@@ -382,34 +383,28 @@ class FoldUserClustersGenerator:
 
 class FoldSplitter:
     """
-    Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
-    When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
+        Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
+        When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    def split_into_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
+    def __init__(self, split_method):
         """
-        Data frame will be split on a timestamp_col based on the period_in_months parameter.
-        Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least 
-        recent date. Folds are constructed starting for the least recent extracted date. For example, the first fold will 
-        contain the rows with timestamps in interval [the least recent date, the least recent extracted date + period_in_months]
-        as its training set. The test set will contain the rows with timestamps in interval [the least recent date + 
-        period_in_months , the least recent date + 2 * period_in_months]. For the next fold we include the rows from the next
-        "period_in_months" period. And again the rows from the last "period_in_months" period are included in the test set 
-        and everything else in the training set. Paper corpus contains all papers in a fold.
-        Folds information: Currently, in total 5 folds. Data in period [2004-11-04, 2007-12-31].
-        1 fold - Training data [2004-11-04, 2005-05-04], Test data [2005-05-04, 2005-11-04]
-        2 fold - Training data [2004-11-04, 2005-11-04], Test data [2005-11-04, 2006-05-04]
-        3 fold - Training data [2004-11-04, 2006-05-04], Test data [2006-05-04, 2006-11-04]
-        4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
-        5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
-        
+        Initialize the splitter
+        :param split_method: the split method, options: 'time-aware', 'user-based'
+        """
+        self.split_method = split_method
+
+    def split_into_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
+        """
+        :param spark:
         :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
         Each row represents a time when a user likes a paper. The format of the data frame is
-        (user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_id)
-        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids. 
+        (user_hash, citeulikePaperId_col, timestamp_col, userId_col)
+        :param bag_of_words:
+        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
         :param timestamp_col: the name of the timestamp column by which the splitting is done
-        :param period_in_months: number of months that defines the time slot from which rows will be selected for the test 
+        :param period_in_months: number of months that defines the time slot from which rows will be selected for the test
         and training data frame.
         :param paperId_col: name of the column that stores paper ids in the input data frames
         :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
@@ -417,9 +412,78 @@ class FoldSplitter:
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper
-        :return: list of folds. Each fold is an object Fold. 
+        :return: void
         """
-        Logger.log("Split data into folds.")
+        if self.split_method == 'time-aware':
+            self.time_aware_split(spark, history, bag_of_words, papers_mapping, timestamp_col, period_in_months, paperId_col,citeulikePaperId_col, userId_col, tf_map_col)
+        if self.split_method == 'user-based':
+            self.user_based_split(spark, history, bag_of_words, papers_mapping, paperId_col,citeulikePaperId_col, userId_col, tf_map_col, fold_num)
+
+    def user_based_split(self, spark, history, bag_of_words, papers_mapping, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
+        """
+
+        :param spark:
+        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
+        Each row represents a time when a user likes a paper. The format of the data frame is
+        (user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_id)
+        :param bag_of_words:
+        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
+        :param paperId_col: name of the column that stores paper ids in the input data frames
+        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
+        :param userId_col name of the column that stores user ids in the input data frames
+        :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
+        :return: void
+        """
+        Logger.log("Split data into folds using user-based.")
+    # Group users ratings
+    group_user = history.groupBy('user_id').agg(collect_set('paper_id').alias('library'))
+
+    # Split each user library into [fold_num] sets randomly
+    df = group_user.withColumn('splits', UDFContainer().random_divide(group_user[userId_col],fold_num))
+
+    # Create the folds:
+    get_split_udf = F.udf(lambda x,i: x[i], ArrayType(IntegerType()))
+    for i in range(fold_num):
+        group_user.select(group_user[userId_col],get_split_udf('userId_col', i).alias('Fold_'+(i+1)))
+        explodedRatingDF = group_user.select(group_user[userId_col],explode(group_user[splits]).alias('item_id'))
+
+
+
+
+    def time_aware_split(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
+                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
+        """
+        Data frame will be split on a timestamp_col based on the period_in_months parameter.
+        Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least
+        recent date. Folds are constructed starting for the least recent extracted date. For example, the first fold will
+        contain the rows with timestamps in interval [the least recent date, the least recent extracted date + period_in_months]
+        as its training set. The test set will contain the rows with timestamps in interval [the least recent date +
+        period_in_months , the least recent date + 2 * period_in_months]. For the next fold we include the rows from the next
+        "period_in_months" period. And again the rows from the last "period_in_months" period are included in the test set
+        and everything else in the training set. Paper corpus contains all papers in a fold.
+        Folds information: Currently, in total 5 folds. Data in period [2004-11-04, 2007-12-31].
+        1 fold - Training data [2004-11-04, 2005-05-04], Test data [2005-05-04, 2005-11-04]
+        2 fold - Training data [2004-11-04, 2005-11-04], Test data [2005-11-04, 2006-05-04]
+        3 fold - Training data [2004-11-04, 2006-05-04], Test data [2006-05-04, 2006-11-04]
+        4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
+        5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
+
+        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
+        Each row represents a time when a user likes a paper. The format of the data frame is
+        (user_hash, citeulikePaperId_col, timestamp_col, userId_col)
+        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
+        :param timestamp_col: the name of the timestamp column by which the splitting is done
+        :param period_in_months: number of months that defines the time slot from which rows will be selected for the test
+        and training data frame.
+        :param paperId_col: name of the column that stores paper ids in the input data frames
+        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
+        :param userId_col name of the column that stores user ids in the input data frames
+        :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
+        column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
+        in a particular paper
+        :return: void
+        """
+        Logger.log("Split data into folds using time-aware.")
         asc_data_frame = history.orderBy(timestamp_col)
         start_date = asc_data_frame.first()[2]
         Logger.log("Start date:" + str(start_date))
@@ -447,8 +511,8 @@ class FoldSplitter:
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
             # build the corpus for the fold, it includes all papers part of the fold
-            fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col)\
-                        .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
+            fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col) \
+                .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
             fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
 
@@ -456,15 +520,16 @@ class FoldSplitter:
             topics = 150
             Logger.log("Training LDA. Fold:" + str(fold_index) + ". The number of topics:" + str(topics))
             ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=topics,
-                                                  paperId_col=paperId_col, tf_map_col=tf_map_col,
-                                                  output_col="lda_vector")
+                                          paperId_col=paperId_col, tf_map_col=tf_map_col,
+                                          output_col="lda_vector")
             ldaModel = ldaVectorizer.fit(bag_of_words)
             fold.ldaModel = ldaModel
 
             Logger.log("Generate candidate set.")
             # Generate candidate set for each user in the test set
-            candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame, fold.test_data_frame,
-                                                                   userId_col, paperId_col, citeulikePaperId_col)
+            candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame,
+                                                           fold.test_data_frame,
+                                                           userId_col, paperId_col, citeulikePaperId_col)
             candidate_set = candidateGenerator.generate_candidate_set()
             fold.candidate_set = candidate_set
 
@@ -489,7 +554,6 @@ class FoldSplitter:
             fold_index += 1
         history.unpersist()
 
-
     def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
         """
         Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
@@ -501,6 +565,7 @@ class FoldSplitter:
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param userId_col name of the column that stores user ids in the input data frames
         :param data_frame: data frame from which the fold will be extracted. Because we filter based on timestamp, timestamp_col has to be present.
+        Its columns: user_hash, citeulikePaperId_col, timestamp_col, userId_col, paper_id
         :param end_date: the end date of the fold that has to be extracted
         :param period_in_months: what time duration will be the test set. Respectively, the training set.
         :return: an object Fold, training and test data frame in the fold have the same format as the input data frame.
@@ -593,18 +658,19 @@ class FoldValidator():
         self.tf_map_col = tf_map_col
         self.model_training = model_training
 
-    def create_folds(self, spark, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", fold_period_in_months=6):
+    def create_folds(self, spark, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", split_method='time-aware', fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
         Statistics are also stored for each fold.
 
-        :param history: data frame which contains information when a user liked a paper. Its columns timestamp_col, paperId_col,
-        citeulikePaperId_col, userId_col
+        :param history: data frame which contains information when a user liked a paper.
+        Its columns: user_hash, citeulikePaperId_col, timestamp_col, userId_col
         :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
         :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
         :param statistics_file_name name of the file in which statistics will be written
         :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
+        :param split_method: The method to split data, optinos: 'time-aware', 'user-based'
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test 
         and training data frame
         """
