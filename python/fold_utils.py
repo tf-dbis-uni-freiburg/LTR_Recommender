@@ -450,9 +450,44 @@ class FoldSplitter:
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
         :return: void
         """
+
+        def random_divide(lst, k):
+            """
+            Randomly splits the items of a given list into k lists
+            :param lst: the input list
+            :param k: the number of resulting lists
+            :return: 2d list
+            """
+            res = []
+            shuffle(lst)
+            partition_size = len(lst) // k
+            for fold in range(k):
+                if fold == k - 1:
+                    res.append(lst[fold * partition_size:len(lst)])
+                else:
+                    res.append(lst[fold * partition_size:fold * partition_size + partition_size])
+            return res
+
+        def get_training_set(lst, fold):
+            """
+            :param fold: The fuld number
+            :return: a union of all sublists except the one at position (fold)
+            """
+            res = []
+            for i, s in enumerate(lst):
+                if i != fold:
+                    res.extend(s)
+            return res
+
+        random_divide_udf = F.udf(UDFContainer.__random_divide, ArrayType(ArrayType(IntegerType())))
+        get_training_set_udf = F.udf(lambda x, i: UDFContainer.__get_training_set(x, i), ArrayType(IntegerType()))
+        # Returns the sublist at position (i)
+        get_test_set_udf = F.udf(lambda x, i: x[i], ArrayType(IntegerType()))
+
+
         Logger.log("Split data into folds using user-based.")
 
-        udfContainer = UDFContainer()
+        # udfContainer = UDFContainer()
         # add paper id to the ratings
         history = history.join(papers_mapping, citeulikePaperId_col)
         history.cache()
@@ -461,16 +496,16 @@ class FoldSplitter:
         group_user = history.groupBy('user_id').agg(F.collect_set('paper_id').alias('library'))
 
         # Randomly split each user library into [fold_num] sets
-        df = group_user.withColumn('splits', udfContainer.random_divide(group_user[userId_col],F.lit(fold_num)))
+        df = group_user.withColumn('splits', random_divide_udf(userId_col,F.lit(fold_num)))
 
         # Create the folds:
         for fold_index in range(fold_num):
             start_time = datetime.datetime.now()
             col_name = 'Fold_' + str(fold_index + 1)
-            test_data_frame = df.select(userId_col, udfContainer.get_test_set_udf('splits', F.lit(fold_index)).alias(col_name))
+            test_data_frame = df.select(userId_col, get_test_set_udf('splits', F.lit(fold_index)).alias(col_name))
             test_data_frame = test_data_frame.select(userId_col, F.explode(test_data_frame[col_name]).alias(paperId_col))
 
-            training_data_frame = df.select(userId_col, udfContainer.get_training_set_udf('splits', F.lit(fold_index)).alias(col_name))
+            training_data_frame = df.select(userId_col, get_training_set_udf('splits', F.lit(fold_index)).alias(col_name))
             training_data_frame = training_data_frame .select(userId_col, F.explode(training_data_frame [col_name]).alias(paperId_col))
 
             # construct the fold object
