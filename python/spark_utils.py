@@ -28,7 +28,7 @@ class UDFContainer():
         self.get_candidate_set_per_user = F.udf(UDFContainer.__get_candidate_set_per_user, ArrayType(ArrayType(DoubleType())))
         self.calculate_prediction = F.udf(UDFContainer.__calculate_prediction, FloatType())
         self.random_divide = F.udf(UDFContainer.__random_divide, ArrayType(ArrayType(IntegerType())))
-        self.get_training_set = F.udf(lambda x, i: UDFContainer.__get_training_set(x, i), ArrayType(IntegerType))
+        self.get_training_set = F.udf(lambda x, i: UDFContainer.__get_training_set(x, i), ArrayType(IntegerType()))
         
         # Returns the sublist at position (i)
         self.get_test_set_udf = F.udf(lambda x, i: x[i], ArrayType(IntegerType()))
