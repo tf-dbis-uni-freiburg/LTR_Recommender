@@ -48,7 +48,7 @@ fold_validator = FoldValidator(peer_papers_count=args.peers_count,
                                pairs_generation=args.pairs_generation,
                                paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
                                userId_col="user_id", tf_map_col="term_occurrence",
-                               model_training=args.model_training,output_folder = args.output_dir, split_method = args.split)
+                               model_training=args.model_training,output_dir = args.output_dir, split_method = args.split)
 
 # uncomment to generate new folds
 fold_validator.create_folds(spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6)
