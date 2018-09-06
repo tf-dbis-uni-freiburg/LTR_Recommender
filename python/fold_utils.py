@@ -782,7 +782,7 @@ class FoldValidator():
     NUMBER_OF_FOLD = 5;
 
     def __init__(self, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm", output_folder = 'results', split_method = 'time-aware'):
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm", output_dir = 'results', split_method = 'time-aware'):
         """
         Construct FoldValidator object.
 
@@ -806,7 +806,7 @@ class FoldValidator():
         self.userId_col = userId_col
         self.tf_map_col = tf_map_col
         self.model_training = model_training
-        self.output_folder = output_folder
+        self.output_dir = output_dir
         self.split_method = split_method
 
     def create_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
@@ -833,7 +833,7 @@ class FoldValidator():
         splitter = FoldSplitter(self.split_method, os.path.join(self.output_dir,'{}_folds'.format(self.split_method)))
         splitter.split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,self.paperId_col, self.citeulikePaperId_col, self.userId_col)
         end_time = datetime.datetime.now() - start_time
-        file = open(os.path.join(self.output_folder,"creation-folds.txt"), "a")
+        file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
         file.write("Overall time : ")
         file.write("End time: " + str(end_time) + "\n")
         file.close()
@@ -980,7 +980,7 @@ class FoldValidator():
             evaluation_per_user = fold_evaluator.evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score",  paperId_col = self.paperId_col)
 
             end_time = datetime.datetime.now() - start_time
-            file = open(os.path.join(self.output_folder,"execution.txt"), "a")
+            file = open(os.path.join(self.output_dir,"execution.txt"), "a")
             file.write("Overall time:" + str(end_time) + "\n")
             file.close()
 
@@ -1026,7 +1026,7 @@ class FoldEvaluator:
         for k in k_ndcg:
             column_names.append("NDCG@" + str(k))
         column_names.append("fold_index")
-        file_name = os.path.join(self.output_folder,  self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
+        file_name = os.path.join(self.output_dir,  self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
         with open(file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(column_names)
@@ -1213,7 +1213,7 @@ class FoldEvaluator:
         overall_evaluation_list = np.array(avg.collect())[0]
         overall_evaluation_list = overall_evaluation_list.tolist()
         overall_evaluation_list.append(fold_index)
-        file_name = os.path.join(self.output_folder, self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
+        file_name = os.path.join(self.output_dir, self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
         with open(file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(overall_evaluation_list)
