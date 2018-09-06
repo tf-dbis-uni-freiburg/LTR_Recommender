@@ -479,8 +479,8 @@ class FoldSplitter:
                     res.extend(s)
             return res
 
-        random_divide_udf = F.udf(UDFContainer.__random_divide, ArrayType(ArrayType(IntegerType())))
-        get_training_set_udf = F.udf(lambda x, i: UDFContainer.__get_training_set(x, i), ArrayType(IntegerType()))
+        random_divide_udf = F.udf(random_divide, ArrayType(ArrayType(IntegerType())))
+        get_training_set_udf = F.udf(lambda x, i: get_training_set(x, i), ArrayType(IntegerType()))
         # Returns the sublist at position (i)
         get_test_set_udf = F.udf(lambda x, i: x[i], ArrayType(IntegerType()))
 
@@ -496,7 +496,7 @@ class FoldSplitter:
         group_user = history.groupBy('user_id').agg(F.collect_set('paper_id').alias('library'))
 
         # Randomly split each user library into [fold_num] sets
-        df = group_user.withColumn('splits', random_divide_udf(userId_col,F.lit(fold_num)))
+        df = group_user.withColumn('splits', random_divide_udf('library', F.lit(fold_num)))
 
         # Create the folds:
         for fold_index in range(fold_num):
