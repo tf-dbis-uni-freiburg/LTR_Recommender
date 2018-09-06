@@ -1,18 +1,18 @@
 from pyspark.sql.types import *
-
+import os
 class Loader:
     """
     Class that contains functionality for parsing and loading different files into data frames.
     """
 
-    def __init__(self, path, spark):
+    def __init__(self, input_dir, spark):
         """
         Constructs the loader object.
         
-        :param path: path to the folder from where all input files can be read
+        :param input_dir: path to the folder from where all input files can be read
         :param spark: spark instance needed for loading the data into data frames
         """
-        self.path = path
+        self.input_dir = input_dir
         self.spark = spark
 
     def load_terms(self, filename):
@@ -23,7 +23,7 @@ class Loader:
         equal to the line number of the term in the file.
         :return: data frame with 2 columns - term, term_id
         """
-        terms_rdd = self.spark.sparkContext.textFile(self.path + filename)
+        terms_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
 
         # add index to each term, 0-based on the row
         terms_rdd = terms_rdd.zipWithIndex()
@@ -43,7 +43,7 @@ class Loader:
         :param filename: name of the file which contains user ratings
         :return: data frame with 3 columns - ratings_count, user_library, user_id
         """
-        users_ratings_rdd = self.spark.sparkContext.textFile(self.path + filename)
+        users_ratings_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
         users_ratings_rdd = users_ratings_rdd.map(self.__parse_users_ratings)
 
         # add index to each term, 0-based on the row
@@ -84,7 +84,7 @@ class Loader:
         :param filename: name of the file which contains mapping between user_id and citeulike_user_hash
         :return: data frame with two columns - citeulike_user_hash, user_id
         """
-        users_mapping = self.spark.sparkContext.textFile(self.path + filename)
+        users_mapping = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
 
         # remove header
         header = users_mapping.first()
@@ -111,7 +111,7 @@ class Loader:
             #  name, dataType, nullable
             StructField("citeulike_paper_id", StringType(), False),
             StructField("paper_id", IntegerType(), False)])
-        papers_mapping = self.spark.read.csv(self.path + filename, header=True, schema=papersMappingSchema)
+        papers_mapping = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=papersMappingSchema)
         return papers_mapping
 
     def load_papers(self, filename):
@@ -141,7 +141,7 @@ class Loader:
             StructField("address", StringType(), True),
             StructField("text", StringType(), True)
         ])
-        papers = self.spark.read.csv(self.path + filename, header=True, schema=papersSchema)
+        papers = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=papersSchema)
         return papers
 
     def load_history(self, filename):
@@ -159,7 +159,7 @@ class Loader:
                                     StructField("citeulike_paper_id", StringType(), False),
                                     StructField("timestamp", StringType(), False),
                                     StructField("tag", StringType(), False)])
-        history = self.spark.read.csv(self.path + filename, header=True, schema=history_schema)
+        history = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=history_schema)
         history = history.drop("tag")
         # drops duplicates - if there are more tags per (paper, user) pair
         history = history.dropDuplicates()
@@ -186,7 +186,7 @@ class Loader:
         how many time each term appears in the paper
         :return: data frame with 3 columns - (terms_count, term_occurrence, paper_id)
         """
-        bag_of_words_per_paper_rdd = self.spark.sparkContext.textFile(self.path + filename)
+        bag_of_words_per_paper_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))
 
         # TODO see what's the problem __parse_bag_of_words not being a static function
         bag_of_words_per_paper_rdd = bag_of_words_per_paper_rdd.map(Loader.__parse_bag_of_words)

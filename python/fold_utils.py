@@ -13,7 +13,7 @@ from pyspark.sql.window import Window
 import datetime
 import numpy as np
 from pyspark.ml.clustering import KMeans
-
+import os
 class Fold:
     """
     Encapsulates the notion of a fold. Each fold consists of training, test data frame and papers corpus. Each fold has an index which indicated 
@@ -44,7 +44,7 @@ class Fold:
     """ Prefix of the name of the folder in which the fold is stored. """
     PREFIX_FOLD_FOLDER_NAME = "fold-"
 
-    def __init__(self, training_data_frame, test_data_frame):
+    def __init__(self, training_data_frame, test_data_frame, output_path, split_method='time-aware'):
         self.index = None
         self.training_data_frame = training_data_frame
         self.test_data_frame = test_data_frame
@@ -59,6 +59,8 @@ class Fold:
         self.candidate_set = None
         # cluster_id, centroid, [user_ids] a list of users that belong to this cluster
         self.user_clusters = None
+        self.output_path = output_path
+        self.split_method = split_method
 
     def set_index(self, index):
         self.index = index
@@ -87,18 +89,18 @@ class Fold:
         "distributed-fold-2" folder.
         """
         # save test data frame
-        self.test_data_frame.write.csv(Fold.get_test_data_frame_path(self.index))
+        self.test_data_frame.write.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(self.index)))
         # save training data frame
-        self.training_data_frame.write.csv(Fold.get_training_data_frame_path(self.index))
+        self.training_data_frame.write.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(self.index)))
         # save paper corpus
-        self.papers_corpus.papers.write.csv(Fold.get_papers_corpus_frame_path(self.index))
+        self.papers_corpus.papers.write.csv(os.path.join(self.output_path,Fold.get_papers_corpus_frame_path(self.index)))
         # save lda paper profiles
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.ldaModel.paper_profiles.write.parquet(Fold.get_lda_papers_frame_path(self.index))
+        self.ldaModel.paper_profiles.write.parquet(os.path.join(self.output_path,Fold.get_lda_papers_frame_path(self.index)))
         # save candidate set for each paper in the test set
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.candidate_set.write.parquet(Fold.get_candidate_set_data_frame_path(self.index))
+        self.candidate_set.write.parquet(os.path.join(self.output_path,Fold.get_candidate_set_data_frame_path(self.index)))
         # save user clusters
         # format - cluster_id, centroid, [user_ids]
         # parquet used because we cannot store vectors (lda vectors) in csv format
@@ -114,18 +116,18 @@ class Fold:
         "fold-2" folder.
         """
         # save test data frame
-        self.test_data_frame.coalesce(1).write.csv(Fold.get_test_data_frame_path(self.index, distributed=False))
+        self.test_data_frame.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(self.index, distributed=False)))
         # save training data frame
-        self.training_data_frame.coalesce(1).write.csv(Fold.get_training_data_frame_path(self.index, distributed=False))
+        self.training_data_frame.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(self.index, distributed=False)))
         # save paper corpus
-        self.papers_corpus.papers.coalesce(1).write.csv(Fold.get_papers_corpus_frame_path(self.index, distributed=False))
+        self.papers_corpus.papers.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_papers_corpus_frame_path(self.index, distributed=False)))
         # save lda paper profiles
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.ldaModel.paper_profiles.coalesce(1).write.parquet(Fold.get_lda_papers_frame_path(self.index, distributed=False))
+        self.ldaModel.paper_profiles.coalesce(1).write.parquet(os.path.join(self.output_path,Fold.get_lda_papers_frame_path(self.index, distributed=False)))
         # save candidate set for each paper in the test set
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.candidate_set.coalesce(1).write.parquet(Fold.get_candidate_set_data_frame_path(self.index, distributed=False))
+        self.candidate_set.coalesce(1).write.parquet(os.path.join(self.output_path,Fold.get_candidate_set_data_frame_path(self.index, distributed=False)))
         # save user clusters
         # format - cluster_id, centroid, [user_ids]
         # parquet used because we cannot store vectors (lda vectors) in csv format
@@ -387,12 +389,15 @@ class FoldSplitter:
         When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
     """
 
-    def __init__(self, split_method):
+    def __init__(self, split_method, output_dir):
         """
         Initialize the splitter
         :param split_method: the split method, options: 'time-aware', 'user-based'
+        :param output_dir: the directory where the resulting folds will be stored.
         """
         self.split_method = split_method
+        self.output_dir = output_dir
+        self.folds_stats = []
 
     def split_into_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
                          citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
@@ -412,12 +417,24 @@ class FoldSplitter:
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper
+        :param fold_num: The number of folds to be generatd, this parameter is used only if the split_method is not time-aware!
         :return: void
         """
         if self.split_method == 'time-aware':
             self.time_aware_split(spark, history, bag_of_words, papers_mapping, timestamp_col, period_in_months, paperId_col,citeulikePaperId_col, userId_col, tf_map_col)
-        if self.split_method == 'user-based':
+
+        if self.split_method == 'user-based':                                  
             self.user_based_split(spark, history, bag_of_words, papers_mapping, paperId_col,citeulikePaperId_col, userId_col, tf_map_col, fold_num)
+
+        # Store statistics for each fold and store it
+        Logger.log("Storing statistics for folds.")
+        stats_file = os.path.join(self.output_dir,'stats.txt')
+        file = open(stats_file, "a")
+        stats_header = "fold_index | fold_time |  # UTot | #UTR | #UTS | #dU | #nU | #ITot | #ITR | #ITS | #dI | #nI | #RTot | #RTR | #RTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std "
+        file.write(stats_header + " \n")
+        for stats in self.folds_stats:
+            file.write(stats + "\n")
+        file.close()
 
     def user_based_split(self, spark, history, bag_of_words, papers_mapping, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
         """
@@ -456,7 +473,7 @@ class FoldSplitter:
             training_data_frame = training_data_frame .select(userId_col, F.explode(training_data_frame [col_name]).alias(paperId_col))
 
             # construct the fold object
-            fold = Fold(training_data_frame, test_data_frame)
+            fold = Fold(training_data_frame, test_data_frame, self.output_dir, self.split_method)
             fold.set_index(fold_index+1)
 
             # build the corpus for the fold, it includes all papers part of the fold
@@ -479,7 +496,7 @@ class FoldSplitter:
             fold.candidate_set = candidate_set
 
             end_time = datetime.datetime.now() - start_time
-            file = open("results/creation-folds.txt", "a")
+            file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
             file.write("Split and create fold: " + str(fold_index))
             file.write("End time: " + str(end_time) + "\n")
             file.close()
@@ -488,11 +505,14 @@ class FoldSplitter:
             start_time = datetime.datetime.now()
             fold.store_distributed()
             end_time = datetime.datetime.now() - start_time
-            file = open("results/creation-folds.txt", "a")
+            file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
             file.write("Store fold: " + str(fold_index))
             file.write("End time: " + str(end_time) + "\n")
             file.close()
 
+            # Compute fold statistics
+            self.folds_stats.append(FoldsUtils.compute_fold_statistics(fold,userId_col,paperId_col))
+        history.unpersist()
 
 
 
@@ -553,7 +573,7 @@ class FoldSplitter:
             fold_index += 1
             start_time = datetime.datetime.now()
             Logger.log("Extracting fold:" + str(fold_index))
-            fold = FoldSplitter().extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
+            fold = self.extract_fold(history, fold_end_date, period_in_months, timestamp_col, userId_col)
             # start date of each fold is the least recent date in the input data frame
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
@@ -581,16 +601,16 @@ class FoldSplitter:
             fold.candidate_set = candidate_set
 
             end_time = datetime.datetime.now() - start_time
-            file = open("results/creation-folds.txt", "a")
+            file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
             file.write("Split and create fold: " + str(fold_index))
             file.write("End time: " + str(end_time) + "\n")
             file.close()
 
             Logger.log("Storing of the fold.")
             start_time = datetime.datetime.now()
-            fold.store_distributed()
+            fold.store_distributed(self.output_dir)
             end_time = datetime.datetime.now() - start_time
-            file = open("results/creation-folds.txt", "a")
+            file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
             file.write("Store fold: " + str(fold_index))
             file.write("End time: " + str(end_time) + "\n")
             file.close()
@@ -634,7 +654,7 @@ class FoldSplitter:
         test_data_frame = test_data_frame.join(user_ids, userId_col);
 
         # construct the fold object
-        fold = Fold(training_data_frame, test_data_frame)
+        fold = Fold(training_data_frame, test_data_frame, self.output_dir)
         fold.set_period_in_months(period_in_months)
         fold.set_test_set_start_date(test_set_start_date)
         fold.set_test_set_end_date(end_date)
@@ -646,7 +666,7 @@ class FoldsUtils:
     def store_folds(folds, distributed=True):
         """
         Store folds. Possible both ways - distributed or non-distributed manner.
-        
+
         :param folds: list of folds that will be stored
         :param distributed: distributed(partitioned) or non-distributed(one single csv file) manner
         """
@@ -657,16 +677,97 @@ class FoldsUtils:
                 fold.store()
 
     @staticmethod
-    def write_fold_statistics(folds, statistic_file_name):
+    def compute_fold_statistics(fold, userId_col="user_id", paperId_col="paper_id"):
         """
-        Compute statistics for each fold and store them in a file.
-        
-        :param folds: list of folds for which statistics will be computed and stored
-        :param statistic_file_name: file to which collected statistics are written
+        Extract statistics from one fold. Each fold consists of test and training data. 
+        Statistics that are computed for each fold:
+        1) #users in total, TR, TS
+        NOTE: new users, remove users in TS that are in TR
+        2) #items in total, TR, TS (with or without new items)
+        3) #ratings in total, TR, TS
+        4) #positive ratings per user - min/max/avg/std in TS/TR
+        5) #postive ratings per item - min/max/avg/std in TS/TR
+        Possible format of the data frames in the fold - (citeulike_paper_id, paper_id, citeulike_user_hash, user_id).
+        :param fold: object that contains information about the fold. It consists of training data frame and test data frame. 
+        :param userId_col the name of the column that represents a user by its id or hash
+        :param paperId_col the name of the column that represents a paper by its id 
+        :return string: statistic formatted in a string.
         """
-        st_writer = FoldStatisticsWriter(statistic_file_name)
-        for fold in folds:
-            st_writer.statistics(fold)
+        Logger.log("Storing statistics for folds.")
+        training_data_frame = fold.training_data_frame.select(paperId_col, userId_col)
+        test_data_frame = fold.test_data_frame.select(paperId_col, userId_col)
+        full_data_set = training_data_frame.union(test_data_frame)
+
+        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | \n"
+
+        # ratings statistics
+        total_ratings_count = full_data_set.count()
+        tr_ratings_count = training_data_frame.count()
+        ts_ratings_count = test_data_frame.count()
+
+        # user statistics #users in total, TR, TS
+        total_users_count = full_data_set.select(userId_col).distinct().count()
+        tr_users = training_data_frame.select(userId_col).distinct()
+        tr_users_count = tr_users.count()
+        test_users = test_data_frame.select(userId_col).distinct()
+        test_users_count = test_users.count()
+
+        diff_users_count = tr_users.subtract(test_users).count()
+        new_users_count = test_users.subtract(tr_users).count()
+
+        # items in total, TR, TS (with or without new items)
+        total_items_count = full_data_set.select(paperId_col).distinct().count()
+        tr_items = training_data_frame.select(paperId_col).distinct()
+        tr_items_count = tr_items.count()
+        test_items = test_data_frame.select(paperId_col).distinct()
+        test_items_count = test_items.count()
+
+        # papers that appear only in the training set
+        diff_items_count = tr_items.subtract(test_items).count()
+        # papers that appear only in the test set but not in the training set
+        new_items_count = test_items.subtract(tr_items).count()
+
+        # ratings per user - min/max/avg/std in TR
+        tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
+        tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
+        tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
+        tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
+        tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
+
+        # ratings per user - min/max/avg/std in TS
+        ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
+        ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
+        ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
+        ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
+        ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
+
+        # ratings per item - min/max/avg/std in TR
+        tr_ratings_per_item = training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
+        tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
+        tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
+        tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
+        tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
+
+        # ratings per item - min/max/avg/std in TR
+        ts_ratings_per_item = test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
+        ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
+        ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
+        ts_avg_ratings_per_item = ts_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
+        ts_std_ratings_per_item = ts_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
+
+        fold_time = str(fold.tr_start_date) + "-" + str(fold.ts_start_date) + "-" + str(fold.ts_end_date)
+        formatted_line = line.format(fold.index, fold_time, total_users_count, tr_users_count, test_users_count, diff_users_count, new_users_count, \
+                                     total_items_count, tr_items_count, test_items_count, diff_items_count, new_items_count, \
+                                     total_ratings_count, tr_ratings_count, ts_ratings_count, \
+                                     str(tr_min_ratings_per_user) + "/" + str(tr_max_ratings_per_user) +
+                                     "/" + "{0:.2f}".format(tr_avg_ratings_per_user) + "/" + "{0:.2f}".format(tr_std_ratings_per_user) \
+                                     , str(ts_min_ratings_per_user) + "/" + str(ts_max_ratings_per_user) + "/" +
+                                     "{0:.2f}".format(ts_avg_ratings_per_user) + "/" + "{0:.2f}".format(ts_std_ratings_per_user), \
+                                     str(tr_min_ratings_per_item) + "/" + str(tr_max_ratings_per_item) + "/" +
+                                     "{0:.2f}".format(tr_avg_ratings_per_item) + "/" + "{0:.2f}".format(tr_std_ratings_per_item), \
+                                     str(ts_min_ratings_per_item) + "/" + str(ts_max_ratings_per_item) + "/" +
+                                     "{0:.2f}".format(ts_avg_ratings_per_item) + "/" + "{0:.2f}".format(ts_std_ratings_per_item))
+        return formatted_line
 
 class FoldValidator():
     """
@@ -681,7 +782,7 @@ class FoldValidator():
     NUMBER_OF_FOLD = 5;
 
     def __init__(self, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm"):
+                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm", output_folder = 'results', split_method = 'time-aware'):
         """
         Construct FoldValidator object.
 
@@ -695,6 +796,7 @@ class FoldValidator():
         in a particular paper.
         :param model_training: gm (general model), imp (individual model parallel version), ims (individual model sequential version)
         See Model_Training enum
+        :param split_method: string specifies the method to split into folds, available options: time-aware, user-based
         """
         self.paperId_col = paperId_col
         self.userId_col = userId_col
@@ -704,8 +806,10 @@ class FoldValidator():
         self.userId_col = userId_col
         self.tf_map_col = tf_map_col
         self.model_training = model_training
+        self.output_folder = output_folder
+        self.split_method = split_method
 
-    def create_folds(self, spark, history, bag_of_words, papers_mapping, statistics_file_name, timestamp_col="timestamp", split_method='time-aware', fold_period_in_months=6):
+    def create_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
@@ -724,17 +828,15 @@ class FoldValidator():
         # creates all splits and stores them
         Logger.log("Creating folds.")
         start_time = datetime.datetime.now()
-        FoldSplitter().split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,
-                                                self.paperId_col,
-                                                self.citeulikePaperId_col, self.userId_col)
+
+        # The output folder of the splitter is a subfolder from the output folder of the validator, the subfolder is named after the split_method:
+        splitter = FoldSplitter(self.split_method, os.path.join(self.output_dir,'{}_folds'.format(self.split_method)))
+        splitter.split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,self.paperId_col, self.citeulikePaperId_col, self.userId_col)
         end_time = datetime.datetime.now() - start_time
-        file = open("results/creation-folds.txt", "a")
+        file = open(os.path.join(self.output_folder,"creation-folds.txt"), "a")
         file.write("Overall time : ")
         file.write("End time: " + str(end_time) + "\n")
         file.close()
-        # compute statistics for each fold and store it
-        Logger.log("Calculating statistics for folds.")
-        FoldsUtils.write_fold_statistics(folds, statistics_file_name)
 
     def load_fold(self, spark, fold_index, distributed=True):
         """
@@ -796,7 +898,7 @@ class FoldValidator():
         Logger.log("Start evaluation over folds.")
         for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
             # write a file for all folds, it contains a row per fold
-            file = open("results/execution.txt", "a")
+            file = open(os.path.join(self.output_dir,"execution.txt"), "a")
             file.write("fold " + str(i) + "\n")
             file.write("Model training: " + self.model_training + "\n")
             file.write("Pair generation: " + self.pairs_generation + "\n")
@@ -837,8 +939,7 @@ class FoldValidator():
             # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
             peers_dataset = nps.load_peers(spark, i)
 
-            # if IMP or IMS, removes from training data frame those users which do not appear in the test set, no need
-            # a model for them to be trained
+            # if IMP or IMS, removes from training data frame those users which do not appear in the test set, no need for a model for them to be trained
             if (self.model_training == "imp" or self.model_training == "ims"):
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
@@ -879,7 +980,7 @@ class FoldValidator():
             evaluation_per_user = fold_evaluator.evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score",  paperId_col = self.paperId_col)
 
             end_time = datetime.datetime.now() - start_time
-            file = open("results/execution.txt", "a")
+            file = open(os.path.join(self.output_folder,"execution.txt"), "a")
             file.write("Overall time:" + str(end_time) + "\n")
             file.close()
 
@@ -925,9 +1026,7 @@ class FoldEvaluator:
         for k in k_ndcg:
             column_names.append("NDCG@" + str(k))
         column_names.append("fold_index")
-
-        file_name = "results/" + self.model_training + "-" + str(
-            self.peers_count) + "-" + self.pairs_generation + "-" + self.RESULTS_CSV_FILENAME
+        file_name = os.path.join(self.output_folder,  self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
         with open(file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(column_names)
@@ -1114,122 +1213,11 @@ class FoldEvaluator:
         overall_evaluation_list = np.array(avg.collect())[0]
         overall_evaluation_list = overall_evaluation_list.tolist()
         overall_evaluation_list.append(fold_index)
-        file_name = "results/" + self.model_training + "-" + str(self.peers_count) + "-" + self.pairs_generation + "-" + self.RESULTS_CSV_FILENAME
+        file_name = os.path.join(self.output_folder, self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
         with open(file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(overall_evaluation_list)
 
-class FoldStatisticsWriter:
-    """
-    Class that extracts statistics from different folds. For example, number of users in training set, test set and in total.
-    """
-
-    def __init__(self, filename):
-        """
-        Construct an object that is responsible for collecting statistics from folds and store them in a file.
         
-        :param filename: the name of the file in which the collected statistics will be written
-        """
-        self.filename = filename
-        file = open("results/" + filename, "a")
-        # write the header in the file
-        file.write(
-            "fold_index | fold_time | #UTot | #UTR | #UTS | #dU | #nU | #ITot | #ITR | #ITS | #dI | #nI |"
-            " #RTot | #RTR | #RTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std | \n")
-        file.close()
 
-    def statistics(self, fold, userId_col="user_id", paperId_col="paper_id"):
-        """
-        Extract statistics from one fold. Each fold consists of test and training data. 
-        Statistics that are computer for each fold:
-        1) #users in total, TR, TS
-        NOTE: new users, remove users in TS that are in TR
-        2) #items in total, TR, TS (with or without new items)
-        3) #ratings in total, TR, TS
-        4) #positive ratings per user - min/max/avg/std in TS/TR
-        5) #postive ratings per item - min/max/avg/std in TS/TR
-        
-        At the end, write them in a file.
-        
-        :param fold: object that contains information about the fold. It consists of training data frame and test data frame. 
-        :param userId_col the name of the column that represents a user by its id or hash
-        :param paperId_col the name of the column that represents a paper by its id 
-        Possible format of the data frames in the fold - (citeulike_paper_id, paper_id, citeulike_user_hash, user_id).
-        """
-        training_data_frame = fold.training_data_frame.select(paperId_col, userId_col)
-        test_data_frame = fold.test_data_frame.select(paperId_col, userId_col)
-        full_data_set = training_data_frame.union(test_data_frame)
-
-        line = "{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | \n"
-
-        # ratings statistics
-        total_ratings_count = full_data_set.count()
-        tr_ratings_count = training_data_frame.count()
-        ts_ratings_count = test_data_frame.count()
-
-        # user statistics #users in total, TR, TS
-        total_users_count = full_data_set.select(userId_col).distinct().count()
-        tr_users = training_data_frame.select(userId_col).distinct()
-        tr_users_count = tr_users.count()
-        test_users = test_data_frame.select(userId_col).distinct()
-        test_users_count = test_users.count()
-
-        diff_users_count = tr_users.subtract(test_users).count()
-        new_users_count = test_users.subtract(tr_users).count()
-
-        # items in total, TR, TS (with or without new items)
-        total_items_count = full_data_set.select(paperId_col).distinct().count()
-        tr_items = training_data_frame.select(paperId_col).distinct()
-        tr_items_count = tr_items.count()
-        test_items = test_data_frame.select(paperId_col).distinct()
-        test_items_count = test_items.count()
-
-        # papers that appear only in the training set
-        diff_items_count = tr_items.subtract(test_items).count()
-        # papers that appear only in the test set but not in the training set
-        new_items_count = test_items.subtract(tr_items).count()
-
-        # ratings per user - min/max/avg/std in TR
-        tr_ratings_per_user = training_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
-        tr_min_ratings_per_user = tr_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
-        tr_max_ratings_per_user = tr_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
-        tr_avg_ratings_per_user = tr_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
-        tr_std_ratings_per_user = tr_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
-
-        # ratings per user - min/max/avg/std in TS
-        ts_ratings_per_user = test_data_frame.groupBy(userId_col).agg(F.count("*").alias("papers_count"))
-        ts_min_ratings_per_user = ts_ratings_per_user.groupBy().min("papers_count").collect()[0][0]
-        ts_max_ratings_per_user = ts_ratings_per_user.groupBy().max("papers_count").collect()[0][0]
-        ts_avg_ratings_per_user = ts_ratings_per_user.groupBy().avg("papers_count").collect()[0][0]
-        ts_std_ratings_per_user = ts_ratings_per_user.groupBy().agg(F.stddev("papers_count")).collect()[0][0]
-
-        # ratings per item - min/max/avg/std in TR
-        tr_ratings_per_item = training_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
-        tr_min_ratings_per_item = tr_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
-        tr_max_ratings_per_item = tr_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
-        tr_avg_ratings_per_item = tr_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
-        tr_std_ratings_per_item = tr_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
-
-        # ratings per item - min/max/avg/std in TR
-        ts_ratings_per_item = test_data_frame.groupBy(paperId_col).agg(F.count("*").alias("ratings_count"))
-        ts_min_ratings_per_item = ts_ratings_per_item.groupBy().min("ratings_count").collect()[0][0]
-        ts_max_ratings_per_item = ts_ratings_per_item.groupBy().max("ratings_count").collect()[0][0]
-        ts_avg_ratings_per_item = ts_ratings_per_item.groupBy().avg("ratings_count").collect()[0][0]
-        ts_std_ratings_per_item = ts_ratings_per_item.groupBy().agg(F.stddev("ratings_count")).collect()[0][0]
-
-        # write the collected statistics in a file
-        file = open("results/" + self.filename, "a")
-        fold_time = str(fold.tr_start_date) + "-" + str(fold.ts_start_date) + "-" + str(fold.ts_end_date)
-        formatted_line = line.format(fold.index, fold_time, total_users_count, tr_users_count, test_users_count, diff_users_count, new_users_count, \
-                                     total_items_count, tr_items_count, test_items_count, diff_items_count, new_items_count, \
-                                     total_ratings_count, tr_ratings_count, ts_ratings_count, \
-                                     str(tr_min_ratings_per_user) + "/" + str(tr_max_ratings_per_user) +
-                                     "/" + "{0:.2f}".format(tr_avg_ratings_per_user) + "/" + "{0:.2f}".format(tr_std_ratings_per_user) \
-                                    , str(ts_min_ratings_per_user) + "/" + str(ts_max_ratings_per_user) + "/" +
-                                    "{0:.2f}".format(ts_avg_ratings_per_user) + "/" + "{0:.2f}".format(ts_std_ratings_per_user), \
-                                        str(tr_min_ratings_per_item) + "/" + str(tr_max_ratings_per_item) + "/" +
-                                     "{0:.2f}".format(tr_avg_ratings_per_item) + "/" + "{0:.2f}".format(tr_std_ratings_per_item), \
-                                    str(ts_min_ratings_per_item) + "/" + str(ts_max_ratings_per_item) + "/" +
-                                    "{0:.2f}".format(ts_avg_ratings_per_item) + "/" + "{0:.2f}".format(ts_std_ratings_per_item))
-        file.write(formatted_line)
-        file.close()
+    
