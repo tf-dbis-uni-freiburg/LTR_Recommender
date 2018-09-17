@@ -30,7 +30,7 @@ class PeerPapersSampler(Transformer):
                  output_col="peer_paper_id"):
         """
         :param papers_corpus: PaperCorpus object that contains data frame. It represents all papers from the corpus. 
-        Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information.
+        Possible format (paper_id) See PaperCorpus documentation for more information.
         :param peer_papers_count: number of peer papers that will be sampled per paper
         :param paperId_col name of the paper id column in the input data frame of transform()
         :param userId_col name of the user id column in the input data frame of transform()
@@ -48,7 +48,7 @@ class PeerPapersSampler(Transformer):
         The names of the columns that store them are paperId_col and userId_col, respectively.
         The method generates for each pair, a list of peer papers. Each user has a library which is a list of paper ids 
         that the user likes. Peer papers for each paper are generated randomly from all papers in the paper corpus 
-        except the papers that the user in the pair(paper,user) likes. At the end, output data set will have an additional 
+        except the papers that the user in the pair (paper,user) likes. At the end, output data set will have an additional
         column output_col that contains one of the generated ids. The number of row per pair will be equal to the 
         number of generated peer papers. For example, if a paper corpus contains paper ids - [1, 2, 3, 4, 5, 6],
         a (user, paper) pair is (1, 2). The user library (user, [list of liked papers]) is (1, [1, 2, 3]). If the number 
@@ -59,7 +59,7 @@ class PeerPapersSampler(Transformer):
         """
 
         # because paper ids in the papers_corpus are not sequential, generate a column "paper_id_index" with sequential order
-        papers = self.papers_corpus.papers.drop(self.papers_corpus.citeulikePaperId_col)
+        papers = self.papers_corpus.papers
 
         # generate sequential ids for papers, use zipWithIndex to generate ids starting from 0
         # (name, dataType, nullable)
@@ -181,7 +181,8 @@ class PapersPairBuilder(Transformer):
         self.label_col = label_col
 
     def _transform(self, dataset):
-        # dataset format -> peer_paper_id | paper_id | user_id | citeulike_paper_id
+        # TODO check dataframe format
+        # dataset format -> peer_paper_id | paper_id | user_id
         def diff(v1, v2):
             """
             Calculate the difference between two arrays.
@@ -243,7 +244,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id | lda_vector | peer_paper_lda_vector
             positive_class_dataset = self.vectorizer_model.transform(positive_class_dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -275,7 +276,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id | lda_vector | peer_paper_lda_vector
             negative_class_dataset = self.vectorizer_model.transform(negative_class_dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -301,7 +302,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id ? | lda_vector | peer_paper_lda_vector
             dataset = self.vectorizer_model.transform(dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -330,7 +331,7 @@ class PapersPairBuilder(Transformer):
             self.vectorizer_model.setPaperIdCol("peer_paper_id")
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
-            # schema -> peer_paper_id | paper_id | user_id ? | citeulike_paper_id | lda_vector | peer_paper_lda_vector
+            # schema -> peer_paper_id | paper_id | user_id ? | lda_vector | peer_paper_lda_vector
             dataset = self.vectorizer_model.transform(dataset)
 
             # return the default columns of the paper profiles model, the model is ready for the training
@@ -391,7 +392,7 @@ class LearningToRank(Estimator, Transformer):
 
         :param spark spark instance, used for creating a data frame of user ids
         :param papers_corpus: PapersCorpus object that contains data frame. It represents all papers from the corpus. 
-        Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information. It is used
+        Possible format (paper_id). See PaperCorpus documentation for more information. It is used
         during the first phase of the algorithm when sampling of peer papers is done.
 
         :param paper_profiles_model: a model that can produce a representation for each paper is used. For example, 
@@ -455,7 +456,7 @@ class LearningToRank(Estimator, Transformer):
                                               output_col=self.features_col,
                                               label_col="label")
         # 2) pair building
-        # format -> paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+        # format -> paper_id | peer_paper_id | user_id | lda_vector | peer_paper_lda_vector | features | label
         dataset = papersPairBuilder.transform(dataset)
         dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
         # train multiple models, one for each user in the data set
@@ -569,7 +570,7 @@ class LearningToRank(Estimator, Transformer):
             # create Label Points needed for the model
             def createLabelPoint(line):
                 # label, features
-                # paper_id | peer_paper_id | user_id | citeulike_paper_id | features | label
+                # paper_id | peer_paper_id | user_id | features | label
                 return LabeledPoint(line[-1], line[-2])
 
             # convert data points data frame to RDD

@@ -21,10 +21,11 @@ class EqualityTest():
             fold = FoldValidator().load_fold(self.spark, i)
 
             # drop some unneeded columns
-            # user_id | citeulike_paper_id | paper_id |
-            fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
-            # citeulike_paper_id | user_id | paper_id|
-            fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
+            # user_id | paper_id |
+            fold.test_data_frame = fold.test_data_frame.drop("timestamp")
+            # user_id | paper_id |
+            fold.training_data_frame = fold.training_data_frame.drop("timestamp")
+            fold.training_data_frame = fold.training_data_frame.drop("timestamp")
 
             # load peers so you can remove the randomization factor when comparing
             # 1) Peer papers sampling
@@ -32,7 +33,7 @@ class EqualityTest():
                                     userId_col=self.userId_col,
                                     output_col="peer_paper_id")
 
-            # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
+            # schema -> user_id | paper_id | peer_paper_id |
             peers_dataset = nps.load_peers(self.spark, i)
 
             # removes from training data frame those users which do not appear in the test set, no need
@@ -60,7 +61,7 @@ class EqualityTest():
                                                       output_col="features",
                                                       label_col="label")
             # 2) pair building
-            # format -> paper_id | peer_paper_id | user_id | citeulike_paper_id | lda_vector | peer_paper_lda_vector | features | label
+            # format -> paper_id | peer_paper_id | user_id | lda_vector | peer_paper_lda_vector | features | label
             dataset = papersPairBuilder.transform(peers_dataset)
             dataset = dataset.drop("peer_paper_lda_vector", "lda_vector")
             dataset.persist()

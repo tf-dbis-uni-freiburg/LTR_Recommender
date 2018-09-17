@@ -22,7 +22,7 @@ class TFVectorizer(Estimator):
         Create an instance of the class.
         
         :param papers_corpus: PaperCorpus object that contains data frame. It represents all papers from the corpus. 
-        Possible format (paper_id, citeulike_paper_id). See PaperCorpus documentation for more information.
+        Possible format (paper_id). See PaperCorpus documentation for more information.
         :param paperId_col name of the paper id column in the input data frame of fit()
         :param tf_map_col name of the tf representation column in the input data frame of fit(). The type of the 
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
@@ -57,6 +57,7 @@ class TFVectorizer(Estimator):
         """
 
         # select only those papers that are part of the paper corpus
+        papers.show()
         papers = papers.join(self.papers_corpus.papers, papers[self.paperId_col] == self.papers_corpus.papers[self.papers_corpus.paperId_col]).drop(papers[self.paperId_col])
         # explode map with key:value pairs
         # term_occurrence

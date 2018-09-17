@@ -82,56 +82,32 @@ class Fold:
 
     def store_distributed(self):
         """
-        For a fold, store its test data frame, training data frame, its papers corpus, lda profiles for all
-        paper in its paper corpus and candidate set of papers for each user in the test set.
+        For a fold, store its test data frame, training data frame and its candidate set of papers for each user in the test set.
+        If time-aware splitting is chosen, its papers corpus, lda profiles for all papers in its paper corpus are stored too.
         All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
         of a fold. For example, for a fold with index 2, the stored information for it will be in
         "distributed-fold-2" folder.
         """
         # save test data frame
-        self.test_data_frame.write.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(self.index)))
+        self.test_data_frame.write.csv(os.path.join(self.output_path, Fold.get_test_data_frame_path(self.index)))
         # save training data frame
-        self.training_data_frame.write.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(self.index)))
-        # save paper corpus
-        self.papers_corpus.papers.write.csv(os.path.join(self.output_path,Fold.get_papers_corpus_frame_path(self.index)))
-        # save lda paper profiles
-        # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.ldaModel.paper_profiles.write.parquet(os.path.join(self.output_path,Fold.get_lda_papers_frame_path(self.index)))
+        self.training_data_frame.write.csv(os.path.join(self.output_path, Fold.get_training_data_frame_path(self.index)))
         # save candidate set for each paper in the test set
         # format - user_id, [candidate_set]
         # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.candidate_set.write.parquet(os.path.join(self.output_path,Fold.get_candidate_set_data_frame_path(self.index)))
+        self.candidate_set.write.parquet(os.path.join(self.output_path, Fold.get_candidate_set_data_frame_path(self.index)))
         # save user clusters
         # format - cluster_id, centroid, [user_ids]
         # parquet used because we cannot store vectors (lda vectors) in csv format
         # self.user_clusters.write.parquet(Fold.get_user_clusters_data_frame_path(self.index))
 
-    def store(self):
-        """
-        For a fold, store its test data frame, training data frame, its papers corpus, lda profiles for all
-        paper in its paper corpus and candidate set of papers for each user in the test set.
-        Each data frame will be stored in a single csv file.
-        All of them are stored in a folder which name is based on PREFIX_FOLD_FOLDER_NAME and the index
-        of a fold. For example, for a fold with index 2, the stored information for it will be in
-        "fold-2" folder.
-        """
-        # save test data frame
-        self.test_data_frame.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(self.index, distributed=False)))
-        # save training data frame
-        self.training_data_frame.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(self.index, distributed=False)))
-        # save paper corpus
-        self.papers_corpus.papers.coalesce(1).write.csv(os.path.join(self.output_path,Fold.get_papers_corpus_frame_path(self.index, distributed=False)))
-        # save lda paper profiles
-        # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.ldaModel.paper_profiles.coalesce(1).write.parquet(os.path.join(self.output_path,Fold.get_lda_papers_frame_path(self.index, distributed=False)))
-        # save candidate set for each paper in the test set
-        # format - user_id, [candidate_set]
-        # parquet used because we cannot store vectors (lda vectors) in csv format
-        self.candidate_set.coalesce(1).write.parquet(os.path.join(self.output_path,Fold.get_candidate_set_data_frame_path(self.index, distributed=False)))
-        # save user clusters
-        # format - cluster_id, centroid, [user_ids]
-        # parquet used because we cannot store vectors (lda vectors) in csv format
-        # self.user_clusters.coalesce(1).write.parquet(Fold.get_user_clusters_data_frame_path(self.index, distributed=False))
+        # if time-aware split is chosen, eahc fold has its own paper corpus and lda model
+        if self.split_method == 'time-aware':
+            # save paper corpus
+            self.papers_corpus.papers.write.csv(os.path.join(self.output_path, Fold.get_papers_corpus_frame_path(self.index)))
+            # save lda paper profiles
+            # parquet used because we cannot store vectors (lda vectors) in csv format
+            self.ldaModel.paper_profiles.write.parquet(os.path.join(self.output_path, Fold.get_lda_papers_frame_path(self.index)))
 
     @staticmethod
     def get_test_data_frame_path(fold_index, distributed=True):
@@ -272,14 +248,13 @@ class FoldCandidateSetGenerator:
     Format of the candidate set - user_id, candidate_set, where candidate_set is a list of paper ids.
     """
 
-    def __init__(self, spark, paper_corpus, training_data_frame, test_data_frame, userId_col = "user_id", paperId_col = "paper_id", citeulikePaperId_col="citeulike_paper_id"):
+    def __init__(self, spark, paper_corpus, training_data_frame, test_data_frame, userId_col = "user_id", paperId_col = "paper_id"):
         self.spark = spark
         self.training_data_frame = training_data_frame
         self.test_data_frame = test_data_frame
         self.paper_corpus = paper_corpus
         self.userId_col = userId_col
         self.paperId_col = paperId_col
-        self.citeulikePaperId_col = citeulikePaperId_col
 
     def generate_candidate_set(self):
 
@@ -385,8 +360,9 @@ class FoldUserClustersGenerator:
 
 class FoldSplitter:
     """
-        Class that contains functionality to split data frame into folds based on its timestamp_col. Each fold consist of training and test data frame.
-        When a fold is extracted, it can be stored. So if the folds are stored once, they can be loaded afterwards instead of extracting them again.
+        Class that contains functionality to split data frame into folds. Two options are provided - time-aware and user-based aware splitting.
+        Each fold consist of training and test data frame. When a fold is extracted, it can be stored. So if the folds are stored once,
+        they can be loaded afterwards instead of extracting them again.
     """
 
     def __init__(self, split_method, output_dir):
@@ -399,36 +375,33 @@ class FoldSplitter:
         self.output_dir = output_dir
         self.folds_stats = []
 
-    def split_into_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
+    def split_into_folds(self, spark, history, bag_of_words, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
         """
-        :param spark:
-        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
-        Each row represents a time when a user likes a paper. The format of the data frame is
-        (user_hash, citeulikePaperId_col, timestamp_col, userId_col)
-        :param bag_of_words:
-        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
-        :param timestamp_col: the name of the timestamp column by which the splitting is done
+        :param spark: spark instance
+        :param history: data frame that will be split. If time-aware splitting is used, the timestamp_col has to be present.
+            History dataframe contains papers' likes of users. Each row represents a time when a user likes a paper.
+            Format -> (timestamp | user_id | paper_id)
+        :param bag_of_words: (data frame) bag of words representation for each paper. Format -> (terms_count | term_occurrence | paper_id)
+        :param timestamp_col: the name of the timestamp column by which the splitting is done. Only used in time-aware splitting.
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test
-        and training data frame.
+        and training data frame. Only used in time-aware splitting.
         :param paperId_col: name of the column that stores paper ids in the input data frames
-        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
         :param userId_col name of the column that stores user ids in the input data frames
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
         column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
         in a particular paper
-        :param fold_num: The number of folds to be generatd, this parameter is used only if the split_method is not time-aware!
+        :param fold_num: The number of folds to be generated, this parameter is used only if the split_method is not time-aware!
         :return: void
         """
         if self.split_method == 'time-aware':
-            self.time_aware_split(spark, history, bag_of_words, papers_mapping, timestamp_col, period_in_months, paperId_col,citeulikePaperId_col, userId_col, tf_map_col)
+            self.time_aware_split(spark, history, bag_of_words, timestamp_col, period_in_months, paperId_col, userId_col, tf_map_col)
 
         if self.split_method == 'user-based':                                  
-            self.user_based_split(spark, history, bag_of_words, papers_mapping, paperId_col,citeulikePaperId_col, userId_col, tf_map_col, fold_num)
+            self.user_based_split(spark, history, bag_of_words, paperId_col, userId_col, tf_map_col, fold_num)
 
         # Store statistics for each fold and store it
         Logger.log("Storing statistics for folds.")
-        stats_file = os.path.join(self.output_dir,'stats.txt')
+        stats_file = os.path.join(self.output_dir, 'stats.txt')
         file = open(stats_file, "a")
         stats_header = "fold_index | fold_time |  # UTot | #UTR | #UTS | #dU | #nU | #ITot | #ITR | #ITS | #dI | #nI | #RTot | #RTR | #RTS | #PUTR min/max/avg/std | #PUTS min/max/avg/std | #PITR min/max/avg/std | #PITS min/max/avg/std "
         file.write(stats_header + " \n")
@@ -436,20 +409,36 @@ class FoldSplitter:
             file.write(stats + "\n")
         file.close()
 
-    def user_based_split(self, spark, history, bag_of_words, papers_mapping, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
+    def user_based_split(self, spark, history, bag_of_words, paperId_col="paper_id" , userId_col = "user_id", tf_map_col = "term_occurrence", fold_num = 5):
         """
-        :param spark:
-        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
-        Each row represents a time when a user likes a paper. The format of the data frame is
-        (user_id, citeulike_paper_id, citeulike_user_hash, timestamp, paper_id)
-        :param bag_of_words:
-        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
+        :param spark: spark instance
+        :param history: data frame that will be split. History dataframe contains papers' likes of users. Each row represents a time when a user likes a paper.
+            Format -> (timestamp | user_id | paper_id)
+        :param bag_of_words: (data frame) bag of words representation for each paper. Format -> (terms_count | term_occurrence | paper_id)
         :param paperId_col: name of the column that stores paper ids in the input data frames
-        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
         :param userId_col name of the column that stores user ids in the input data frames
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
         :return: void
         """
+
+        # build the paper corpus, it includes all papers mentioned in the history data frame
+        history.show()
+        fold_papers = history.select("paper_id").dropDuplicates()
+        history.show()
+        papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col)
+
+        # store paper corpus
+        papers_corpus.papers.write.csv(os.path.join(self.output_dir, Fold.PAPER_CORPUS_DF_CSV_FILENAME))
+
+        # train the LDA model, topics adjusts the number of topics generated by LDA
+        topics = 150
+        Logger.log("Training LDA. The number of topics: {}".format(topics))
+        ldaVectorizer = LDAVectorizer(papers_corpus=papers_corpus, k_topics=topics, paperId_col=paperId_col,
+                                      tf_map_col=tf_map_col, output_col="lda_vector")
+        ldaModel = ldaVectorizer.fit(bag_of_words)
+        # save lda paper profiles
+        # parquet used because we cannot store vectors (lda vectors) in csv format
+        ldaModel.paper_profiles.write.parquet(os.path.join(self.output_path, Fold.LDA_DF_FILENAME))
 
         def random_divide(lst, k):
             """
@@ -460,7 +449,7 @@ class FoldSplitter:
             """
             res = []
             shuffle(lst)
-            partition_size = len(lst) // k
+            partition_size = len(lst) # col k
             for fold in range(k):
                 if fold == k - 1:
                     res.append(lst[fold * partition_size:len(lst)])
@@ -484,12 +473,7 @@ class FoldSplitter:
         # Returns the sublist at position (i)
         get_test_set_udf = F.udf(lambda x, i: x[i], ArrayType(IntegerType()))
 
-
         Logger.log("Split data into folds using user-based.")
-
-        # udfContainer = UDFContainer()
-        # add paper id to the ratings
-        history = history.join(papers_mapping, citeulikePaperId_col)
         history.cache()
 
         # Group users ratings
@@ -512,22 +496,9 @@ class FoldSplitter:
             fold = Fold(training_data_frame, test_data_frame, self.output_dir, self.split_method)
             fold.set_index(fold_index+1)
 
-            # build the corpus for the fold, it includes all papers part of the fold
-            fold_papers = fold.training_data_frame.join(papers_mapping,paperId_col).select(citeulikePaperId_col, paperId_col) \
-                .union(fold.test_data_frame.join(papers_mapping,paperId_col).select(citeulikePaperId_col, paperId_col)).dropDuplicates()
-            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
-            fold.set_papers_corpus(fold_papers_corpus)
-
-            # train LDA, topics adjusts the number of topics generated by LDA
-            topics = 150
-            Logger.log("Training LDA. Fold: {}. The number of topics: {}".format(fold_index, topics))
-            ldaVectorizer = LDAVectorizer(papers_corpus=fold_papers_corpus, k_topics=topics, paperId_col=paperId_col, tf_map_col=tf_map_col, output_col="lda_vector")
-            ldaModel = ldaVectorizer.fit(bag_of_words)
-            fold.ldaModel = ldaModel
-
             Logger.log("Generate candidate set.")
             # Generate candidate set for each user in the test set
-            candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame, fold.test_data_frame, userId_col, paperId_col, citeulikePaperId_col)
+            candidateGenerator = FoldCandidateSetGenerator(spark, papers_corpus, fold.training_data_frame, fold.test_data_frame, userId_col, paperId_col)
             candidate_set = candidateGenerator.generate_candidate_set()
             fold.candidate_set = candidate_set
 
@@ -551,10 +522,7 @@ class FoldSplitter:
         history.unpersist()
 
 
-
-
-    def time_aware_split(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id",
-                         citeulikePaperId_col="citeulike_paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
+    def time_aware_split(self, spark, history, bag_of_words, timestamp_col="timestamp", period_in_months=6, paperId_col="paper_id", userId_col = "user_id", tf_map_col = "term_occurrence"):
         """
         Data frame will be split on a timestamp_col based on the period_in_months parameter.
         Initially, by sorting the input data frame by timestamp will be extracted the most recent date and the least
@@ -571,18 +539,14 @@ class FoldSplitter:
         4 fold - Training data [2004-11-04, 2006-11-04], Test data [2006-11-04, 2007-05-04]
         5 fold - Training data [2004-11-04, 2007-05-04], Test data [2007-05-04, 2007-11-04]
 
-        :param history: data frame that will be split. The timestamp_col has to be present. It contains papers' likes of users.
-        Each row represents a time when a user likes a paper. The format of the data frame is
-        (user_hash, citeulikePaperId_col, timestamp_col, userId_col)
-        :param papers_mapping: data frame that contains mapping between paper ids and citeulike paper ids.
+        :param history: data frame which contains information when a user liked a paper. Format -> (timestamp | user_id | paper_id)
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param period_in_months: number of months that defines the time slot from which rows will be selected for the test
         and training data frame.
-        :param paperId_col: name of the column that stores paper ids in the input data frames
-        :param citeulikePaperId_col: name of the column that stores citeulike paper ids in the input data frames
+        :param paperId_col: name of the column that stores paper ids in the input data frame
         :param userId_col name of the column that stores user ids in the input data frames
         :param tf_map_col name of the tf representation column in bag_of_words data frame. The type of the
-        column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
+        column is Map. It contains key:value pairs where key is the term id and value is #occurrences of the term
         in a particular paper
         :return: void
         """
@@ -596,8 +560,6 @@ class FoldSplitter:
         Logger.log("End date:" + str(end_date))
         fold_index = 1
 
-        # add paper id to the ratings
-        history = history.join(papers_mapping, citeulikePaperId_col)
         history.cache()
         # first fold will contain first "period_in_months" in the training set
         # and next "period_in_months" in the test set
@@ -614,9 +576,9 @@ class FoldSplitter:
             fold.set_training_set_start_date(start_date)
             fold.set_index(fold_index)
             # build the corpus for the fold, it includes all papers part of the fold
-            fold_papers = fold.training_data_frame.select(citeulikePaperId_col, paperId_col) \
-                .union(fold.test_data_frame.select(citeulikePaperId_col, paperId_col)).dropDuplicates()
-            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col, citeulikePaperId_col)
+            fold_papers = fold.training_data_frame.select(paperId_col) \
+                .union(fold.test_data_frame.select(paperId_col)).dropDuplicates()
+            fold_papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col)
             fold.set_papers_corpus(fold_papers_corpus)
 
             # train LDA, topics adjusts the number of topics generated by LDA
@@ -629,10 +591,11 @@ class FoldSplitter:
             fold.ldaModel = ldaModel
 
             Logger.log("Generate candidate set.")
+
             # Generate candidate set for each user in the test set
             candidateGenerator = FoldCandidateSetGenerator(spark, fold_papers_corpus, fold.training_data_frame,
                                                            fold.test_data_frame,
-                                                           userId_col, paperId_col, citeulikePaperId_col)
+                                                           userId_col, paperId_col)
             candidate_set = candidateGenerator.generate_candidate_set()
             fold.candidate_set = candidate_set
 
@@ -646,10 +609,13 @@ class FoldSplitter:
             start_time = datetime.datetime.now()
             fold.store_distributed(self.output_dir)
             end_time = datetime.datetime.now() - start_time
-            file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
-            file.write("Store fold: " + str(fold_index))
+            file = open(os.path.join(self.output_dir, "creation-folds.txt"), "a")
+            file.write("Store fold - {}".format(str(fold_index)))
             file.write("End time: " + str(end_time) + "\n")
             file.close()
+
+            # Compute fold statistics
+            self.folds_stats.append(FoldsUtils.compute_fold_statistics(fold, userId_col, paperId_col))
 
             # add the fold to the result list
             # include the next "period_in_months" in the fold, they will be in its test set
@@ -657,7 +623,7 @@ class FoldSplitter:
             fold_index += 1
         history.unpersist()
 
-    def extract_fold(self, data_frame, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
+    def extract_fold(self, history, end_date, period_in_months, timestamp_col="timestamp", userId_col = "user_id"):
         """
         Data frame will be split into training and test set based on a timestamp_col and the period_in_months parameter.
         For example, if you have rows with timestamps in interval [2004-11-04, 2011-11-12] in the "data_frame", end_date is 2008-09-29 
@@ -667,8 +633,8 @@ class FoldSplitter:
         
         :param timestamp_col: the name of the timestamp column by which the splitting is done
         :param userId_col name of the column that stores user ids in the input data frames
-        :param data_frame: data frame from which the fold will be extracted. Because we filter based on timestamp, timestamp_col has to be present.
-        Its columns: user_hash, citeulikePaperId_col, timestamp_col, userId_col, paper_id
+        :param history: data frame from which the fold will be extracted. Because we filter based on timestamp, timestamp_col has to be present.
+         It contains information when a user liked a paper. Format -> (timestamp | user_id | paper_id)
         :param end_date: the end date of the fold that has to be extracted
         :param period_in_months: what time duration will be the test set. Respectively, the training set.
         :return: an object Fold, training and test data frame in the fold have the same format as the input data frame.
@@ -678,10 +644,10 @@ class FoldSplitter:
         test_set_start_date = end_date + relativedelta(months=-period_in_months)
 
         # remove all rows outside the period [test_start_date, test_end_date]
-        test_data_frame = data_frame.filter(F.col(timestamp_col) >= test_set_start_date).filter(
+        test_data_frame = history.filter(F.col(timestamp_col) >= test_set_start_date).filter(
             F.col(timestamp_col) <= end_date)
 
-        training_data_frame = data_frame.filter(F.col(timestamp_col) < test_set_start_date)
+        training_data_frame = history.filter(F.col(timestamp_col) < test_set_start_date)
 
         # all distinct users in training data frame
         user_ids = training_data_frame.select(userId_col).distinct()
@@ -690,7 +656,7 @@ class FoldSplitter:
         test_data_frame = test_data_frame.join(user_ids, userId_col);
 
         # construct the fold object
-        fold = Fold(training_data_frame, test_data_frame, self.output_dir)
+        fold = Fold(training_data_frame, test_data_frame, self.output_dir, self.split_method)
         fold.set_period_in_months(period_in_months)
         fold.set_test_set_start_date(test_set_start_date)
         fold.set_test_set_end_date(end_date)
@@ -723,7 +689,6 @@ class FoldsUtils:
         3) #ratings in total, TR, TS
         4) #positive ratings per user - min/max/avg/std in TS/TR
         5) #postive ratings per item - min/max/avg/std in TS/TR
-        Possible format of the data frames in the fold - (citeulike_paper_id, paper_id, citeulike_user_hash, user_id).
         :param fold: object that contains information about the fold. It consists of training data frame and test data frame. 
         :param userId_col the name of the column that represents a user by its id or hash
         :param paperId_col the name of the column that represents a paper by its id 
@@ -807,69 +772,64 @@ class FoldsUtils:
 
 class FoldValidator():
     """
-    Class that run all phases of the Learning To Rank algorithm on multiple folds. It divides the input data set based 
-    on a time slot into multiple folds. If they are already stored, before running the algorithm, they will be loaded.
-    Otherwise FoldSplitter will be used to extract and store them for later use. Each fold contains test, 
-    training data set, papers corpus and LDA model are generated. The model is trained over the training set. 
-    Then the prediction over the test set (candidate set) is calculated. 
+    Class that runs all phases of the Learning To Rank algorithm on multiple folds.
+    Firstly, it divides the input data into multiple folds. Two options for splitting the data into folds are
+    available: time-aware split and user-based split. FoldSplitter class extracts folds for later use.
+    Each fold contains test, training data set, papers corpus and LDA model. For more information, see FoldSplitter class that contains the
+    functionality.
+
+    Once folds are created, they are stored in a distributed manner. If already stored, before running the algorithm,
+    the folds are loaded. Finally, the predictions over the test set (or candidate set) is calculated.
     """
 
-    """ Total number of folds. Adjust number of folds. """
-    NUMBER_OF_FOLD = 5;
-
-    def __init__(self, peer_papers_count=10, pairs_generation="edp", paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id",
-                 userId_col="user_id", tf_map_col="term_occurrence", model_training = "gm", output_dir = 'results', split_method = 'time-aware'):
+    def __init__(self, peer_papers_count = 10, pairs_generation = "edp", paperId_col = "paper_id",
+                 userId_col = "user_id", model_training = "gm", output_dir = 'results', split_method = 'time-aware'):
         """
         Construct FoldValidator object.
 
-        :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank 
-        :param pairs_generation: DUPLICATED_PAIRS, ONE_CLASS_PAIRS, EQUALLY_DISTRIBUTED_PAIRS. See Pairs_Generation enum
+        :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank
+        :param pairs_generation: approaches for generating pairs. Possible options: dp (duplicated_pairs) - dp, ocp (one_class_pairs), edp (equally_distributed_pairs)
         :param paperId_col: name of a column that contains identifier of each paper
-        :param citeulikePaperId_col: name of a column that contains citeulike identifier of each paper
         :param userId_col: name of a column that contains identifier of each user
-        :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the 
-        column is Map. It contains key:value pairs where key is the term id and value is #occurence of the term
-        in a particular paper.
         :param model_training: gm (general model), imp (individual model parallel version), ims (individual model sequential version)
-        See Model_Training enum
+        :param output_dir: folder to store the results, the folds and the results
         :param split_method: string specifies the method to split into folds, available options: time-aware, user-based
         """
         self.paperId_col = paperId_col
         self.userId_col = userId_col
-        self.citeulikePaperId_col = citeulikePaperId_col
         self.peer_papers_count = peer_papers_count
         self.pairs_generation = pairs_generation
         self.userId_col = userId_col
-        self.tf_map_col = tf_map_col
         self.model_training = model_training
         self.output_dir = output_dir
         self.split_method = split_method
 
-    def create_folds(self, spark, history, bag_of_words, papers_mapping, timestamp_col="timestamp", fold_period_in_months=6):
+    def create_folds(self, spark, history, bag_of_words, tf_map_col="term_occurrence", timestamp_col="timestamp", fold_period_in_months=6):
         """
         Split history data frame into folds based on timestamp_col. For each of them construct its papers corpus using
         all papers of a fold. To extract the folds, FoldSplitter is used. The folds will be stored(see Fold.store()).
         Statistics are also stored for each fold.
 
-        :param history: data frame which contains information when a user liked a paper.
-        Its columns: user_hash, citeulikePaperId_col, timestamp_col, userId_col
-        :param bag_of_words:(data frame) bag of words representation for each paper. Format (paperId_col, tf_map_col)
-        :param papers_mapping: data frame that contains a mapping (citeulikePaperId_col, paperId_col)
-        :param statistics_file_name name of the file in which statistics will be written
+        :param history: data frame which contains information when a user liked a paper. Format -> (timestamp | user_id | paper_id)
+        :param bag_of_words: (data frame) bag of words representation for each paper. Format -> (terms_count | term_occurrence | paper_id)
+        :param tf_map_col: name of the tf representation column in bag_of_words data frame. The type of the
+        column is Map. It contains key:value pairs where key is the term id and value is #occurrence of the term
+        in a particular paper.
         :param timestamp_col: the name of the timestamp column by which the splitting is done. It is part of a history data frame
-        :param split_method: The method to split data, optinos: 'time-aware', 'user-based'
+        :param split_method: The method to split data, options: 'time-aware', 'user-based'
         :param fold_period_in_months: number of months that defines the time slot from which rows will be selected for the test 
-        and training data frame
+        and training data frame. Only used when time-aware splitting is applied.
         """
         # creates all splits and stores them
         Logger.log("Creating folds.")
         start_time = datetime.datetime.now()
 
         # The output folder of the splitter is a subfolder from the output folder of the validator, the subfolder is named after the split_method:
-        splitter = FoldSplitter(self.split_method, os.path.join(self.output_dir,'{}_folds'.format(self.split_method)))
-        splitter.split_into_folds(spark, history, bag_of_words, papers_mapping, timestamp_col, fold_period_in_months,self.paperId_col, self.citeulikePaperId_col, self.userId_col)
+        splitter = FoldSplitter(self.split_method, os.path.join(self.output_dir, '{}_folds'.format(self.split_method)))
+        splitter.split_into_folds(spark, history, bag_of_words, timestamp_col, tf_map_col, fold_period_in_months, self.paperId_col, self.userId_col)
+
         end_time = datetime.datetime.now() - start_time
-        file = open(os.path.join(self.output_dir,"creation-folds.txt"), "a")
+        file = open(os.path.join(self.output_dir, "creation-folds.txt"), "a")
         file.write("Overall time : ")
         file.write("End time: " + str(end_time) + "\n")
         file.close()
@@ -877,8 +837,8 @@ class FoldValidator():
     def load_fold(self, spark, fold_index, distributed=True):
         """
         Load a fold based on its index. Loaded fold which contains test data frame, training data frame and papers corpus.
-        Structure of test and training data frame - (citeulike_paper_id, citeulike_user_hash, timestamp, user_id, paper_id)
-        Structure of papers corpus - (citeulike_paper_id, paper_id)
+        Structure of test and training data frame - (timestamp, user_id, paper_id)
+        Structure of papers corpus - (paper_id)
 
         :param spark: spark instance used for loading
         :param fold_index: index of a fold that used for identifying its location
@@ -886,8 +846,6 @@ class FoldValidator():
         :return: loaded fold which contains test data frame, training data frame and papers corpus.
         """
         test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
-                                       StructField("citeulike_paper_id", StringType(), False),
-                                       StructField("citeulike_user_hash", StringType(), False),
                                        StructField("timestamp", TimestampType(), False),
                                        StructField("paper_id", IntegerType(), False)])
         # load test data frame
@@ -896,9 +854,7 @@ class FoldValidator():
 
         # load training data frame
         # (name, dataType, nullable)
-        training_fold_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                           StructField("citeulike_user_hash", StringType(), False),
-                                           StructField("timestamp", TimestampType(), False),
+        training_fold_schema = StructType([StructField("timestamp", TimestampType(), False),
                                            StructField("user_id", IntegerType(), False),
                                            StructField("paper_id", IntegerType(), False)])
         training_data_frame = spark.read.csv(Fold.get_training_data_frame_path(fold_index, distributed), header=False,
@@ -906,12 +862,11 @@ class FoldValidator():
         fold = Fold(training_data_frame, test_data_frame)
         fold.index = fold_index
         # (name, dataType, nullable)
-        paper_corpus_schema = StructType([StructField("citeulike_paper_id", StringType(), False),
-                                          StructField("paper_id", IntegerType(), False)])
+        paper_corpus_schema = StructType([StructField("paper_id", IntegerType(), False)])
         # load papers corpus
         papers = spark.read.csv(Fold.get_papers_corpus_frame_path(fold_index, distributed), header=False,
                                 schema=paper_corpus_schema)
-        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id", citeulikePaperId_col="citeulike_paper_id")
+        fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id")
 
         # load lda-topics representation for each paper
         papers_lda_vectors = spark.read.parquet(Fold.get_lda_papers_frame_path(fold_index, distributed))
@@ -924,7 +879,7 @@ class FoldValidator():
 
     def evaluate_folds(self, spark):
         """
-        Load each fold, run LTR on it and evaluate its predictions. Then calculate mertics for each fold (MRR@k, RECALL@k, NDCG@k)
+        Load each fold, run LTR on it and evaluate its predictions. Then calculate metrics for each fold (MRR@k, RECALL@k, NDCG@k)
         Evaluation are stored for each fold and overall for all folds (avg).
         
         :param spark: spark instance used for loading the folds
@@ -932,7 +887,7 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         Logger.log("Start evaluation over folds.")
-        for i in range(1, FoldValidator.NUMBER_OF_FOLD + 1):
+        for i in range(1, 5 + 1):
             # write a file for all folds, it contains a row per fold
             file = open(os.path.join(self.output_dir,"execution.txt"), "a")
             file.write("fold " + str(i) + "\n")
@@ -947,10 +902,10 @@ class FoldValidator():
             fold = self.load_fold(spark, i)
 
             # drop some unneeded columns
-            # format of test data frame -> user_id | citeulike_paper_id | paper_id |
-            fold.test_data_frame = fold.test_data_frame.drop("timestamp", "citeulike_user_hash")
-            # format of training data frame -> citeulike_paper_id | user_id | paper_id|
-            fold.training_data_frame = fold.training_data_frame.drop("timestamp", "citeulike_user_hash")
+            # format of test data frame -> user_id | paper_id |
+            fold.test_data_frame = fold.test_data_frame.drop("timestamp")
+            # format of training data frame -> user_id | paper_id |
+            fold.training_data_frame = fold.training_data_frame.drop("timestamp")
 
             # only for clustered model (CM)
             user_clusters = None
@@ -964,7 +919,8 @@ class FoldValidator():
 
             # load peers so you can remove the randomization factor when comparing
             # 1) Peer papers sampling
-            nps = PeerPapersSampler(fold.papers_corpus, self.peer_papers_count, paperId_col=self.paperId_col,
+            nps = PeerPapersSampler(fold.papers_corpus, self.peer_papers_count,
+                                    paperId_col=self.paperId_col,
                                     userId_col=self.userId_col,
                                     output_col="peer_paper_id")
 
@@ -972,7 +928,7 @@ class FoldValidator():
             # peers = nps.transform(fold.training_data_frame)
             # nps.store_peers(i, peers)
 
-            # schema -> user_id | citeulike_paper_id | paper_id | peer_paper_id |
+            # schema -> user_id | paper_id | peer_paper_id |
             peers_dataset = nps.load_peers(spark, i)
 
             # if IMP or IMS, removes from training data frame those users which do not appear in the test set, no need for a model for them to be trained
@@ -996,7 +952,7 @@ class FoldValidator():
                                  pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features")
 
-            Logger.log("Fitting LTR.... .Model:" + str(self.model_training))
+            Logger.log("Fitting LTR..... Model:" + str(self.model_training))
             # fit LTR model
             ltr.fit(peers_dataset)
 
@@ -1020,7 +976,7 @@ class FoldValidator():
             file.write("Overall time:" + str(end_time) + "\n")
             file.close()
 
-            # TODO no need to store results when testing
+            # TODO no need to store results per user when testing
             # store evaluations per user
             # columns = evaluation_per_user.schema.names
             # fold_evaluator.store_fold_results(fold.index, result, columns, distributed=False)

@@ -1,5 +1,6 @@
 from pyspark.sql.types import *
 import os
+
 class Loader:
     """
     Class that contains functionality for parsing and loading different files into data frames.
@@ -23,7 +24,7 @@ class Loader:
         equal to the line number of the term in the file.
         :return: data frame with 2 columns - term, term_id
         """
-        terms_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
+        terms_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))
 
         # add index to each term, 0-based on the row
         terms_rdd = terms_rdd.zipWithIndex()
@@ -43,7 +44,7 @@ class Loader:
         :param filename: name of the file which contains user ratings
         :return: data frame with 3 columns - ratings_count, user_library, user_id
         """
-        users_ratings_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
+        users_ratings_rdd = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))
         users_ratings_rdd = users_ratings_rdd.map(self.__parse_users_ratings)
 
         # add index to each term, 0-based on the row
@@ -84,7 +85,7 @@ class Loader:
         :param filename: name of the file which contains mapping between user_id and citeulike_user_hash
         :return: data frame with two columns - citeulike_user_hash, user_id
         """
-        users_mapping = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))#self.input_dir + filename)
+        users_mapping = self.spark.sparkContext.textFile(os.path.join(self.input_dir,filename))
 
         # remove header
         header = users_mapping.first()
@@ -144,7 +145,7 @@ class Loader:
         papers = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=papersSchema)
         return papers
 
-    def load_history(self, filename):
+    def load_history(self, history_filename, paper_mapping_filename):
         """
         Load the data was downloaded from citeulike. It records for each user (citeulike_user_hash):
         the papers (citeulike_paper_id) he/she added to his/her library along with the timestamp and the tag.
@@ -159,9 +160,9 @@ class Loader:
                                     StructField("citeulike_paper_id", StringType(), False),
                                     StructField("timestamp", StringType(), False),
                                     StructField("tag", StringType(), False)])
-        history = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=history_schema)
+        history = self.spark.read.csv(os.path.join(self.input_dir, history_filename), header=True, schema=history_schema)
         history = history.drop("tag")
-        # drops duplicates - if there are more tags per (paper, user) pair
+        # drops duplicates - if there are more tags per (paper, user) pair, there are with same timestamp
         history = history.dropDuplicates()
 
         # generate user ids
@@ -169,11 +170,27 @@ class Loader:
 
         user_hash_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
                                      StructField("user_id", IntegerType(), False)])
+
         user_hashes = user_hashes.rdd.zipWithIndex().map(lambda x: (x[0][0] , int(x[1]))).toDF(user_hash_schema)
         history = history.join(user_hashes, "citeulike_user_hash")
 
         # convert timestamp to TimestampType
         history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
+
+        # remove citeulike_user_hash column, it is not used anymore in the project
+        history = history.drop("citeulike_user_hash")
+
+        # Loading of the (citeulike paper id - paper id) mapping
+        # format (citeulike_paper_id, paper_id)
+        papers_mapping = self.load_papers_mapping(paper_mapping_filename)
+
+        # add paper id to history and remove citeulike_paper_id
+        history = history.join(papers_mapping, "citeulike_paper_id")
+
+        # remove citeulike_paper_id column, it is not used anymore in the project
+        history = history.drop("citeulike_paper_id")
+
+        # format -> timestamp | user_id | paper_id
         return history
 
     def load_bag_of_words_per_paper(self, filename):
@@ -200,6 +217,7 @@ class Loader:
                                          StructField("paper_id", IntegerType(), False)])
 
         bag_of_words_per_paper = bag_of_words_per_paper_rdd.toDF(bag_of_word_schema)
+        # format -> terms_count | term_occurrence | paper_id
         return bag_of_words_per_paper
 
     @staticmethod
