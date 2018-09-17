@@ -493,7 +493,7 @@ class FoldSplitter:
         history.cache()
 
         # Group users ratings
-        group_user = history.groupBy('user_id').agg(F.collect_set('paper_id').alias('library'))
+        group_user = history.groupBy(userId_col).agg(F.collect_set(paperId_col).alias('library'))
 
         # Randomly split each user library into [fold_num] sets
         df = group_user.withColumn('splits', random_divide_udf('library', F.lit(fold_num)))
