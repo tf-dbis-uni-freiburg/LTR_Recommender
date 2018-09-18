@@ -14,6 +14,7 @@ import datetime
 import numpy as np
 from pyspark.ml.clustering import KMeans
 import os
+import math
 class Fold:
     """
     Encapsulates the notion of a fold. Each fold consists of training, test data frame and papers corpus. Each fold has an index which indicated 
@@ -421,12 +422,13 @@ class FoldSplitter:
         :return: void
         """
 
-        # build the paper corpus, it includes all papers mentioned in the history data frame
-        history.show()
-        fold_papers = history.select("paper_id").dropDuplicates()
-        history.show()
-        papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col)
 
+        # build the paper corpus, it includes all papers mentioned in the history data frame
+        #history.show()
+        fold_papers = history.select("paper_id").dropDuplicates()
+        #history.show()
+        papers_corpus = PaperCorpusBuilder.buildCorpus(fold_papers, paperId_col)
+        """"
         # store paper corpus
         papers_corpus.papers.write.csv(os.path.join(self.output_dir, Fold.PAPER_CORPUS_DF_CSV_FILENAME))
 
@@ -439,6 +441,7 @@ class FoldSplitter:
         # save lda paper profiles
         # parquet used because we cannot store vectors (lda vectors) in csv format
         ldaModel.paper_profiles.write.parquet(os.path.join(self.output_path, Fold.LDA_DF_FILENAME))
+        """
 
         def random_divide(lst, k):
             """
@@ -826,7 +829,7 @@ class FoldValidator():
 
         # The output folder of the splitter is a subfolder from the output folder of the validator, the subfolder is named after the split_method:
         splitter = FoldSplitter(self.split_method, os.path.join(self.output_dir, '{}_folds'.format(self.split_method)))
-        splitter.split_into_folds(spark, history, bag_of_words, timestamp_col, tf_map_col, fold_period_in_months, self.paperId_col, self.userId_col)
+        splitter.split_into_folds(spark, history, bag_of_words, timestamp_col, tf_map_col = tf_map_col, period_in_months=fold_period_in_months, paperId_col=self.paperId_col,userId_col= self.userId_col)
 
         end_time = datetime.datetime.now() - start_time
         file = open(os.path.join(self.output_dir, "creation-folds.txt"), "a")
