@@ -1,6 +1,6 @@
 import argparse
 from pyspark.sql import SparkSession
-
+import os
 from fold_utils import FoldValidator
 from loader import Loader
 from logger import Logger
@@ -14,6 +14,11 @@ parser.add_argument('--peers_count','-pc', type=int, default=25, help='number of
 parser.add_argument('--pairs_generation','-pg', type=str, default="edp", help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
 parser.add_argument('--model_training','-m', type=str, default="cmp",help='Different training approaches for LTR. Possible options 1) general model - gm 2) individual model parallel version - imp 3) individual model squential version - ims 4) cmp - clustered model')
 args = parser.parse_args()
+
+# create a folder for results if it does not exist already
+result_folder_name = os.path.join(args.output_dir)
+if not os.path.exists(result_folder_name):
+    os.makedirs(result_folder_name)
 
 spark = SparkSession.builder.appName("Multi-model_SVM").getOrCreate()
 
