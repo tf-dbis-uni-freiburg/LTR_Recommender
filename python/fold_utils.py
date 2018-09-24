@@ -854,18 +854,22 @@ class FoldValidator():
         if self.split_method == 'user-based':
             fold_schema = StructType([StructField("user_id", IntegerType(), False), StructField("paper_id", IntegerType(), False)])
             # load test data frame
-            test_data_frame = spark.read.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(fold_index, distributed)), header=False, schema=fold_schema)
+            test_data_frame = spark.read.csv(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_test_data_frame_path(fold_index, distributed)), header=False, schema=fold_schema)
 
             # load training data frame
             # (name, dataType, nullable)
-            training_data_frame = spark.read.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(fold_index, distributed)), header=False, schema=fold_schema)
+            training_data_frame = spark.read.csv(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_training_data_frame_path(fold_index, distributed)), header=False, schema=fold_schema)
 
+            # load lda-topics representation for each paper
+            papers_lda_vectors = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.LDA_DF_FILENAME))
+
+            papers = papers_lda_vectors.select("paper_id").dropDuplicates()
         if self.split_method == 'time-aware':
             test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
                                            StructField("timestamp", TimestampType(), False),
                                            StructField("paper_id", IntegerType(), False)])
             # load test data frame
-            test_data_frame = spark.read.csv(os.path.join(self.output_path,Fold.get_test_data_frame_path(fold_index, distributed)), header=False,
+            test_data_frame = spark.read.csv(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_test_data_frame_path(fold_index, distributed)), header=False,
                                              schema=test_fold_schema)
 
             # load training data frame
@@ -874,23 +878,24 @@ class FoldValidator():
                                                StructField("user_id", IntegerType(), False),
                                                StructField("paper_id", IntegerType(), False)])
 
-            training_data_frame = spark.read.csv(os.path.join(self.output_path,Fold.get_training_data_frame_path(fold_index, distributed)), header=False,
+            training_data_frame = spark.read.csv(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_training_data_frame_path(fold_index, distributed)), header=False,
                                                  schema=training_fold_schema)
 
-        # Create the fold object after loading the folds data:
-        fold = Fold(training_data_frame, test_data_frame, split_method=self.split_method)
-        fold.index = fold_index
+            # (name, dataType, nullable)
+            paper_corpus_schema = StructType([StructField("paper_id", IntegerType(), False)])
 
-        # (name, dataType, nullable)
-        paper_corpus_schema = StructType([StructField("paper_id", IntegerType(), False)])
+            # load papers corpus
+            papers = spark.read.csv(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_papers_corpus_frame_path(fold_index, distributed)),
+                header=False, schema=paper_corpus_schema)
 
-        # load papers corpus
-        papers = spark.read.csv(os.path.join(self.output_path,Fold.get_papers_corpus_frame_path(fold_index, distributed)), header=False, schema=paper_corpus_schema)
+            # load lda-topics representation for each paper
+            papers_lda_vectors = spark.read.parquet(os.path.join(self.output_dir,'{}_folds'.format(self.split_method), Fold.get_lda_papers_frame_path(fold_index, distributed)))
+
+        # Create the fold object after loading the folds data
+        fold = Fold(training_data_frame, test_data_frame, split_method=self.split_method, output_path=self.output_dir)
+        fold.ldaModel = LDAModel(papers_lda_vectors, paperId_col="paper_id", output_col="lda_vector");
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id")
-
-        # load lda-topics representation for each paper
-        papers_lda_vectors = spark.read.parquet(os.path.join(self.output_path,Fold.get_lda_papers_frame_path(fold_index, distributed)))
-        fold.ldaModel = LDAModel(papers_lda_vectors, paperId_col = "paper_id", output_col = "lda_vector");
+        fold.index = fold_index
 
         # Load Candidate Set
         candidate_set = spark.read.parquet(Fold.get_candidate_set_data_frame_path(fold_index, distributed))

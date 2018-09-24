@@ -46,7 +46,7 @@ fold_validator = FoldValidator(peer_papers_count = args.peers_count,
                                userId_col = "user_id")
 #
 # uncomment to generate new folds
-fold_validator.create_folds(spark, history, bag_of_words, tf_map_col = "term_occurrence", timestamp_col="timestamp", fold_period_in_months=6)
+# fold_validator.create_folds(spark, history, bag_of_words, tf_map_col = "term_occurrence", timestamp_col="timestamp", fold_period_in_months=6)
 
 # # uncomment to run evaluation
-# #fold_validator.evaluate_folds(spark)
+fold_validator.evaluate_folds(spark)
