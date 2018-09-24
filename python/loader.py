@@ -145,7 +145,7 @@ class Loader:
         papers = self.spark.read.csv(os.path.join(self.input_dir,filename), header=True, schema=papersSchema)
         return papers
 
-    def load_history(self, history_filename, paper_mapping_filename):
+    def load_history(self, history_filename, paper_mapping_filename=None):
         """
         Load the data was downloaded from citeulike. It records for each user (citeulike_user_hash):
         the papers (citeulike_paper_id) he/she added to his/her library along with the timestamp and the tag.
@@ -156,41 +156,47 @@ class Loader:
         Note: Because there might be multiple tags per (paper, user) pair which will lead to multiple rows. 
         Duplicates are dropped.
         """
-        history_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
-                                    StructField("citeulike_paper_id", StringType(), False),
-                                    StructField("timestamp", StringType(), False),
-                                    StructField("tag", StringType(), False)])
-        history = self.spark.read.csv(os.path.join(self.input_dir, history_filename), header=True, schema=history_schema)
-        history = history.drop("tag")
-        # drops duplicates - if there are more tags per (paper, user) pair, there are with same timestamp
-        history = history.dropDuplicates()
+        if paper_mapping_filename:
+            history_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
+                                        StructField("citeulike_paper_id", StringType(), False),
+                                        StructField("timestamp", StringType(), False),
+                                        StructField("tag", StringType(), False)])
+            history = self.spark.read.csv(os.path.join(self.input_dir, history_filename), header=True, schema=history_schema)
+            history = history.drop("tag")
+            # drops duplicates - if there are more tags per (paper, user) pair, there are with same timestamp
+            history = history.dropDuplicates()
 
-        # generate user ids
-        user_hashes = history.select("citeulike_user_hash").distinct()
+            # generate user ids
+            user_hashes = history.select("citeulike_user_hash").distinct()
 
-        user_hash_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
-                                     StructField("user_id", IntegerType(), False)])
+            user_hash_schema = StructType([StructField("citeulike_user_hash", StringType(), False),
+                                         StructField("user_id", IntegerType(), False)])
 
-        user_hashes = user_hashes.rdd.zipWithIndex().map(lambda x: (x[0][0] , int(x[1]))).toDF(user_hash_schema)
-        history = history.join(user_hashes, "citeulike_user_hash")
+            user_hashes = user_hashes.rdd.zipWithIndex().map(lambda x: (x[0][0] , int(x[1]))).toDF(user_hash_schema)
+            history = history.join(user_hashes, "citeulike_user_hash")
 
-        # convert timestamp to TimestampType
-        history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
+            # convert timestamp to TimestampType
+            history = history.withColumn("timestamp", history.timestamp.cast(TimestampType()))
 
-        # remove citeulike_user_hash column, it is not used anymore in the project
-        history = history.drop("citeulike_user_hash")
+            # remove citeulike_user_hash column, it is not used anymore in the project
+            history = history.drop("citeulike_user_hash")
 
-        # Loading of the (citeulike paper id - paper id) mapping
-        # format (citeulike_paper_id, paper_id)
-        papers_mapping = self.load_papers_mapping(paper_mapping_filename)
+            # Loading of the (citeulike paper id - paper id) mapping
+            # format (citeulike_paper_id, paper_id)
+            papers_mapping = self.load_papers_mapping(paper_mapping_filename)
 
-        # add paper id to history and remove citeulike_paper_id
-        history = history.join(papers_mapping, "citeulike_paper_id")
+            # add paper id to history and remove citeulike_paper_id
+            history = history.join(papers_mapping, "citeulike_paper_id")
 
-        # remove citeulike_paper_id column, it is not used anymore in the project
-        history = history.drop("citeulike_paper_id")
+            # remove citeulike_paper_id column, it is not used anymore in the project
+            history = history.drop("citeulike_paper_id")
 
-        # format -> timestamp | user_id | paper_id
+            # format -> timestamp | user_id | paper_id
+        else:
+            history_schema = StructType([StructField("user_id", IntegerType(), False),
+                                         StructField("paper_id", IntegerType(), False)])
+            history = self.spark.read.csv(os.path.join(self.input_dir, history_filename), header=True,schema=history_schema)
+
         return history
 
     def load_bag_of_words_per_paper(self, filename):

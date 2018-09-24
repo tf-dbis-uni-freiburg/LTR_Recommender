@@ -785,13 +785,14 @@ class FoldValidator():
     the folds are loaded. Finally, the predictions over the test set (or candidate set) is calculated.
     """
 
-    def __init__(self, peer_papers_count = 10, pairs_generation = "edp", paperId_col = "paper_id",
-                 userId_col = "user_id", model_training = "gm", output_dir = 'results', split_method = 'time-aware'):
+    def __init__(self, peer_papers_count = 10, pairs_generation = "edp", pairs_features_generation_method= 'sub',  paperId_col = "paper_id",
+                 userId_col = "user_id", model_training = "gm", output_dir = 'results', split_method = 'time-aware', min_peer_similarity = 0):
         """
         Construct FoldValidator object.
 
         :param peer_papers_count: the number of peer papers that will be sampled per paper. See LearningToRank
         :param pairs_generation: approaches for generating pairs. Possible options: dp (duplicated_pairs) - dp, ocp (one_class_pairs), edp (equally_distributed_pairs)
+        :param pairs_features_generation_method TODO(Anas) add the documentation
         :param paperId_col: name of a column that contains identifier of each paper
         :param userId_col: name of a column that contains identifier of each user
         :param model_training: gm (general model), imp (individual model parallel version), ims (individual model sequential version)
@@ -806,6 +807,8 @@ class FoldValidator():
         self.model_training = model_training
         self.output_dir = output_dir
         self.split_method = split_method
+        self.min_peer_similarity =min_peer_similarity
+        self.pairs_features_generation_method = pairs_features_generation_method
 
     def create_folds(self, spark, history, bag_of_words, tf_map_col="term_occurrence", timestamp_col="timestamp", fold_period_in_months=6):
         """
@@ -954,13 +957,16 @@ class FoldValidator():
             # nps.store_peers(i, peers)
 
             # schema -> user_id | paper_id | peer_paper_id |
-            peers_dataset = nps.load_peers(spark, i)
+            peers_dataset = nps.load_peers(spark, i, self.output_dir, self.split_method, peer_size = self.peer_papers_count, min_sim = self.min_peer_similarity)
 
             # if IMP or IMS, removes from training data frame those users which do not appear in the test set, no need for a model for them to be trained
             if (self.model_training == "imp" or self.model_training == "ims"):
                 test_user_ids = fold.test_data_frame.select(self.userId_col).distinct()
                 fold.training_data_frame = fold.training_data_frame.join(test_user_ids, self.userId_col)
                 peers_dataset = peers_dataset.join(test_user_ids, self.userId_col)
+
+            # If the split is user-based, join the peers with the training, this is not needed for time-awar
+            peers_dataset = peers_dataset.join(fold.training_data_frame, [self.userId_col, self.paperId_col])
 
             Logger.log("Persisting the fold ...")
             fold.training_data_frame.persist()
@@ -974,7 +980,7 @@ class FoldValidator():
 
             # Training LTR
             ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, user_clusters=user_clusters, model_training=self.model_training,
-                                 pairs_generation=self.pairs_generation, peer_papers_count=self.peer_papers_count,
+                                 pairs_generation=self.pairs_generation, pairs_features_generation_method = self.pairs_features_generation_method, peer_papers_count=self.peer_papers_count,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features")
 
             Logger.log("Fitting LTR..... Model:" + str(self.model_training))

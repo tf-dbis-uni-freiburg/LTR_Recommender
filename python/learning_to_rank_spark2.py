@@ -18,7 +18,7 @@ from LTR_SVM_spark2 import LTRSVMWithSGD
 from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row
 import sys
 from logger import Logger
-
+import os
 
 class PeerPapersSampler(Transformer):
     """
@@ -127,10 +127,18 @@ class PeerPapersSampler(Transformer):
         path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
         dataset.write.parquet(path)
 
-    def load_peers(self, spark, fold_index):
+    def load_peers(self, spark, fold_index, output_directory, split_method='time-aware', peer_size=1, min_sim=0):
         # Load Candidate Set
-        path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
-        peers = spark.read.parquet(path)
+        if split_method == 'time-aware':
+            path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
+            peers = spark.read.parquet(path)
+        else:
+            path = os.path.join(output_directory, "{}_folds".format(output_directory),"peers", "peers_{}_minsim_{}".format(peer_size, min_sim))
+            schema = StructType([StructField("user_id", IntegerType(), False), StructField("paper_id", IntegerType(), False),
+                                      StructField("peer_id", IntegerType(), False), StructField("similarity", FloatType(), False),
+                                      StructField("user_sim", FloatType(), False)])
+            # load test data frame
+            peers = spark.read.csv(path, header=True, schema=schema)
         return peers
 
 class PapersPairBuilder(Transformer):
@@ -147,7 +155,7 @@ class PapersPairBuilder(Transformer):
     """
 
 
-    def __init__(self, pairs_generation, model_training, vectorizer_model, userId_col="user_id",
+    def __init__(self, pairs_generation, pairs_features_generation_method, model_training, vectorizer_model, userId_col="user_id",
                  paperId_col="paper_id", peer_paperId_col="peer_paper_id",
                  output_col="features", label_col="label"):
         """
@@ -164,6 +172,11 @@ class PapersPairBuilder(Transformer):
         If we train an individual model, distribution is based on pairs (user_id, paper). For the former, all peers for
         a paper independently from user information are divided into 50/50.
         For the latter, peer papers for a paper liked by a particular user are divided into 50/50.
+        :param pairs_features_generation_method The method used in forming the feature vector of the pair, options are:
+        %TODO: specify the features
+        1) sub: p-p' (default)
+        2)
+        3)
         :param model_training sm, smmu or mpu
         :param userId_col name of the user id column in the input data frame
         :param paperId_col name of the column that contains paper id
@@ -179,6 +192,25 @@ class PapersPairBuilder(Transformer):
         self.peer_paperId_col = peer_paperId_col
         self.output_col = output_col
         self.label_col = label_col
+        self.pairs_features_generation_method= pairs_features_generation_method
+
+    def _generate_pair_features(self, pairs_features_generation_method, dataset):
+        """
+        :param pairs_features_generation_method The method used in forming the feature vector of the pair, options are:
+        TODO (Anas): specify the features
+        1) sub: p-p' (default)
+        2)
+        3)
+        :param dataset: dataframe, with the following schema, where 'feature' is already the substraction of p-p'
+         peer_paper_id | paper_id | user_id | similarity | user_sim | features
+        :return: dataframe with the structure, where the 'features' is now updated using the pairs_features_generation_method
+        peer_paper_id | paper_id | user_id | similarity | user_sim |  features
+        """
+        if pairs_features_generation_method == 'sub':
+            return dataset
+        #TODO (Anas): Define the othe methods  (udf!!!!) for pairs_features_generation_method
+
+
 
     def _transform(self, dataset):
         # TODO check dataframe format
@@ -254,6 +286,7 @@ class PapersPairBuilder(Transformer):
 
             # add the difference (paper_vector - peer_paper_vector) with label
             positive_class_dataset = positive_class_dataset.withColumn(self.output_col, vector_diff_udf(former_paper_output_column, "peer_paper_lda_vector"))
+
             # add label 1
             positive_class_dataset = positive_class_dataset.withColumn(self.label_col, F.lit(1))
 
@@ -290,6 +323,7 @@ class PapersPairBuilder(Transformer):
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
 
             result = positive_class_dataset.union(negative_class_dataset)
+
         elif (self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
 
             # add lda paper representation to each paper based on its paper_id
@@ -349,6 +383,10 @@ class PapersPairBuilder(Transformer):
 
         # drop lda vectors - not needed anymore
         result = result.drop("peer_paper_lda_vector", former_paper_output_column)
+
+        # Manipulate the feature vector, depending on the pairs_features_generation_method, the default is sub
+        result = self._generate_pair_features(self.pairs_features_generation_method, result)
+
         return result
 
 
@@ -385,7 +423,7 @@ class LearningToRank(Estimator, Transformer):
     """
 
     def __init__(self, spark, papers_corpus, paper_profiles_model, user_clusters=None, model_training= "gm",
-                 pairs_generation= "edp" ,
+                 pairs_generation= "edp" , pairs_features_generation_method = 'sub',
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.
@@ -408,7 +446,7 @@ class LearningToRank(Estimator, Transformer):
         2) ONE_CLASS_PAIRS - for each paper p_p of the set N, calculate (p - p_p, class:1)
         3) EQUALLY_DISTRIBUTED_PAIRS - for 50% of papers in the set N, calculate p - p_p, class:1), 
         and for the other 50% (p_p - p, class: 0)
-
+        :param pairs_features_generation_method TODO(Anas) add the documentation
         :param model_training: 
         1) GENERAL_MODEL - Train one model per user. Number of models is equal to number of users.
         Each model will be trained only over papers that are liked by particular user. 
@@ -436,6 +474,7 @@ class LearningToRank(Estimator, Transformer):
         self.user_clusters = user_clusters
         # user_id, model per user
         self.models = {}
+        self.pairs_features_generation_method = pairs_features_generation_method
 
     def _fit(self, dataset):
         Logger.log("LTR:fit method")
@@ -449,7 +488,7 @@ class LearningToRank(Estimator, Transformer):
         :return: a trained learning-to-rank model(s) that can be used for predictions
         """
 
-        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.model_training,
+        papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.pairs_features_generation_method, self.model_training,
                                               self.paper_profiles_model,
                                               self.userId_col, self.paperId_col,
                                               peer_paperId_col="peer_paper_id",

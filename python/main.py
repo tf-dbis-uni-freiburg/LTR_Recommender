@@ -13,6 +13,10 @@ parser.add_argument("--split", "-s", choices=['user-based', 'time-aware'],
 parser.add_argument('--peers_count','-pc', type=int, default=25, help='number of peer papers generated for a paper')
 parser.add_argument('--pairs_generation','-pg', type=str, default="edp", help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
 parser.add_argument('--model_training','-m', type=str, default="cmp",help='Different training approaches for LTR. Possible options 1) general model - gm 2) individual model parallel version - imp 3) individual model squential version - ims 4) cmp - clustered model')
+parser.add_argument('--min_peer_similarity','-ms', type=float, default=0, help='The minimum similarity of a paper to be considered as a peer')
+
+#TODO: (Anas): add the options of the following param
+parser.add_argument('--pairs_features_generation_method','-g', choices=['sub'], help='The method used in forming the feature vector of the pair, options are:[sub,...]')
 args = parser.parse_args()
 
 # create a folder for results if it does not exist already
@@ -39,11 +43,12 @@ Logger.log("Loading completed.")
 
 fold_validator = FoldValidator(peer_papers_count = args.peers_count,
                                pairs_generation = args.pairs_generation,
+                               pairs_features_generation_method = args.pairs_features_generation_method,
                                model_training = args.model_training,
                                output_dir = args.output_dir,
                                split_method = args.split,
                                paperId_col = "paper_id",
-                               userId_col = "user_id")
+                               userId_col = "user_id", min_peer_similarity = args.min_peer_similarity)
 #
 # uncomment to generate new folds
 # fold_validator.create_folds(spark, history, bag_of_words, tf_map_col = "term_occurrence", timestamp_col="timestamp", fold_period_in_months=6)
