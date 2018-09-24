@@ -452,7 +452,7 @@ class FoldSplitter:
             """
             res = []
             shuffle(lst)
-            partition_size = len(lst) # col k
+            partition_size = len(lst)//k # col k
             for fold in range(k):
                 if fold == k - 1:
                     res.append(lst[fold * partition_size:len(lst)])
