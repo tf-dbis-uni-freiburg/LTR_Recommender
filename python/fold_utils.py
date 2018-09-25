@@ -1005,7 +1005,7 @@ class FoldValidator():
             # evaluation
             Logger.log("Starting evaluations...")
 
-            fold_evaluator = FoldEvaluator(k_mrr = [5, 10], k_ndcg = [5, 10], k_recall = [x for x in range(5, 200, 20)],
+            fold_evaluator = FoldEvaluator(output_dir=self.output_dir, k_mrr = [5, 10], k_ndcg = [5, 10], k_recall = [x for x in range(5, 200, 20)],
                                            model_training = self.model_training,
                                            peers_count=self.peer_papers_count,
                                            pairs_generation=self.pairs_generation)
@@ -1040,7 +1040,7 @@ class FoldEvaluator:
     """ Name of the file in which results for a fold are written. """
     RESULTS_CSV_FILENAME = "evaluation-results.csv"
 
-    def __init__(self, k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp"):
+    def __init__(self, output_dir,  k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp"):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
@@ -1048,6 +1048,7 @@ class FoldEvaluator:
         self.max_top_k = max((k_mrr + k_ndcg + k_recall))
         self.peers_count = peers_count
         self.pairs_generation = pairs_generation
+        self.output_dir = output_dir
 
         column_names = []
         # write a file for all folds, it contains a row per fold
