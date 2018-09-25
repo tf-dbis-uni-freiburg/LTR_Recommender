@@ -957,7 +957,9 @@ class FoldValidator():
             nps = PeerPapersSampler(fold.papers_corpus, self.peer_papers_count,
                                     paperId_col=self.paperId_col,
                                     userId_col=self.userId_col,
-                                    output_col="peer_paper_id")
+                                    #output_col="peer_paper_id"#TODO: for time-aware uncomment this and comment the next
+                                    output_col="peer_id"
+                                    )
 
             # generating and saving samples, comment this out to generate new samples
             # peers = nps.transform(fold.training_data_frame)
