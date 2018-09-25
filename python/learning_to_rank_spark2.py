@@ -621,7 +621,7 @@ class LearningToRank(Estimator, Transformer):
             return lsvcModel
         Logger.log("Training LTRModel finished.")
 
-    def transform(self, candidate_set):
+    def _transform(self, candidate_set):
         """
         TODO change comments
         Add prediction to each paper in the input data set based on the trained model and its features vector.
