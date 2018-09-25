@@ -867,7 +867,7 @@ class FoldValidator():
             papers_lda_vectors = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.LDA_DF_FILENAME))
 
             # Load Candidate Set
-            candidate_set = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method). Fold.get_candidate_set_data_frame_path(fold_index, distributed)))
+            candidate_set = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.get_candidate_set_data_frame_path(fold_index, distributed)))
 
             papers = papers_lda_vectors.select("paper_id").dropDuplicates()
         if self.split_method == 'time-aware':
