@@ -491,7 +491,8 @@ class LearningToRank(Estimator, Transformer):
         papersPairBuilder = PapersPairBuilder(self.pairs_generation, self.pairs_features_generation_method, self.model_training,
                                               self.paper_profiles_model,
                                               self.userId_col, self.paperId_col,
-                                              peer_paperId_col="peer_paper_id",
+                                              #peer_paperId_col="peer_paper_id", #TODO: for time-aware uncomment this and comment the next
+                                              peer_paperId_col="peer_id",
                                               output_col=self.features_col,
                                               label_col="label")
         # 2) pair building

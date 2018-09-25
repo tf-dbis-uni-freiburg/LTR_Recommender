@@ -987,7 +987,7 @@ class FoldValidator():
 
             # Training LTR
             ltr = LearningToRank(spark, fold.papers_corpus, fold.ldaModel, user_clusters=user_clusters, model_training=self.model_training,
-                                 pairs_generation=self.pairs_generation, pairs_features_generation_method = self.pairs_features_generation_method, peer_papers_count=self.peer_papers_count,
+                                 pairs_generation=self.pairs_generation, pairs_features_generation_method = self.pairs_features_generation_method,
                                  paperId_col=self.paperId_col, userId_col=self.userId_col, features_col="features")
 
             Logger.log("Fitting LTR..... Model:" + str(self.model_training))
