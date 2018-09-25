@@ -273,7 +273,7 @@ class PapersPairBuilder(Transformer):
             former_papeId_column = self.vectorizer_model.paperId_col
 
             # add lda ids paper representation for peer papers
-            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setPaperIdCol(self.peer_paperId_col)
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
             # schema -> peer_paper_id | paper_id | user_id | lda_vector | peer_paper_lda_vector
@@ -306,7 +306,7 @@ class PapersPairBuilder(Transformer):
             former_papeId_column = self.vectorizer_model.paperId_col
 
             # add lda ids paper representation for peer papers
-            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setPaperIdCol(self.peer_paperId_col)
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
             # schema -> peer_paper_id | paper_id | user_id | lda_vector | peer_paper_lda_vector
@@ -333,7 +333,7 @@ class PapersPairBuilder(Transformer):
             former_papeId_column = self.vectorizer_model.paperId_col
 
             # add lda ids paper representation for peer papers
-            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setPaperIdCol(self.peer_paperId_col)
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
             # schema -> peer_paper_id | paper_id | user_id ? | lda_vector | peer_paper_lda_vector
@@ -362,7 +362,7 @@ class PapersPairBuilder(Transformer):
             former_papeId_column = self.vectorizer_model.paperId_col
 
             # add lda ids paper representation for peer papers
-            self.vectorizer_model.setPaperIdCol("peer_paper_id")
+            self.vectorizer_model.setPaperIdCol(self.peer_paperId_col)
             self.vectorizer_model.setOutputCol("peer_paper_lda_vector")
 
             # schema -> peer_paper_id | paper_id | user_id ? | lda_vector | peer_paper_lda_vector
