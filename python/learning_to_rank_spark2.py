@@ -208,7 +208,8 @@ class PapersPairBuilder(Transformer):
         """
         if pairs_features_generation_method == 'sub':
             return dataset
-        #TODO (Anas): Define the othe methods  (udf!!!!) for pairs_features_generation_method
+        #TODO (Anas): Define the othe methods  (udf!!!!) for pairs_features_generation_method and deal with the following line
+        return dataset
 
 
 
@@ -423,7 +424,7 @@ class LearningToRank(Estimator, Transformer):
     """
 
     def __init__(self, spark, papers_corpus, paper_profiles_model, user_clusters=None, model_training= "gm",
-                 pairs_generation= "edp" , pairs_features_generation_method = 'sub',
+                 pairs_generation= "edp" , pairs_features_generation_method = "sub",
                  paperId_col="paper_id", userId_col="user_id", features_col="features"):
         """
         Construct Learning-to-Rank object.

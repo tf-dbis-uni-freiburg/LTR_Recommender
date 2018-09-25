@@ -785,7 +785,7 @@ class FoldValidator():
     the folds are loaded. Finally, the predictions over the test set (or candidate set) is calculated.
     """
 
-    def __init__(self, peer_papers_count = 10, pairs_generation = "edp", pairs_features_generation_method= 'sub',  paperId_col = "paper_id",
+    def __init__(self, peer_papers_count = 10, pairs_generation = "edp", pairs_features_generation_method= "sub",  paperId_col = "paper_id",
                  userId_col = "user_id", model_training = "gm", output_dir = 'results', split_method = 'time-aware', min_peer_similarity = 0):
         """
         Construct FoldValidator object.

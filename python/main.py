@@ -16,7 +16,7 @@ parser.add_argument('--model_training','-m', type=str, default="cmp",help='Diffe
 parser.add_argument('--min_peer_similarity','-ms', type=float, default=0, help='The minimum similarity of a paper to be considered as a peer')
 
 #TODO: (Anas): add the options of the following param
-parser.add_argument('--pairs_features_generation_method','-g', choices=['sub'], help='The method used in forming the feature vector of the pair, options are:[sub,...]')
+parser.add_argument('--pairs_features_generation_method','-g', choices=['sub'], default='sub', help='The method used in forming the feature vector of the pair, options are:[sub,...]')
 args = parser.parse_args()
 
 # create a folder for results if it does not exist already
