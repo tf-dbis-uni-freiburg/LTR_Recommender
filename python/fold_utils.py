@@ -866,6 +866,9 @@ class FoldValidator():
             # load lda-topics representation for each paper
             papers_lda_vectors = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method), Fold.LDA_DF_FILENAME))
 
+            # Load Candidate Set
+            candidate_set = spark.read.parquet(os.path.join(self.output_dir, '{}_folds'.format(self.split_method). Fold.get_candidate_set_data_frame_path(fold_index, distributed)))
+
             papers = papers_lda_vectors.select("paper_id").dropDuplicates()
         if self.split_method == 'time-aware':
             test_fold_schema = StructType([StructField("user_id", IntegerType(), False),
@@ -894,15 +897,19 @@ class FoldValidator():
             # load lda-topics representation for each paper
             papers_lda_vectors = spark.read.parquet(os.path.join(self.output_dir,'{}_folds'.format(self.split_method), Fold.get_lda_papers_frame_path(fold_index, distributed)))
 
+            # Load Candidate Set
+            candidate_set = spark.read.parquet(Fold.get_candidate_set_data_frame_path(fold_index, distributed))
+
+
         # Create the fold object after loading the folds data
         fold = Fold(training_data_frame, test_data_frame, split_method=self.split_method, output_path=self.output_dir)
         fold.ldaModel = LDAModel(papers_lda_vectors, paperId_col="paper_id", output_col="lda_vector");
         fold.papers_corpus = PapersCorpus(papers, paperId_col="paper_id")
         fold.index = fold_index
 
-        # Load Candidate Set
-        candidate_set = spark.read.parquet(Fold.get_candidate_set_data_frame_path(fold_index, distributed))
         fold.candidate_set = candidate_set
+
+
         return fold
 
     def evaluate_folds(self, spark):

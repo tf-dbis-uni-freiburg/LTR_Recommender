@@ -133,7 +133,7 @@ class PeerPapersSampler(Transformer):
             path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
             peers = spark.read.parquet(path)
         else:
-            path = os.path.join(output_directory, "peers", "peers_{}_minsim_{}".format(peer_size, min_sim))
+            path = os.path.join(output_directory, "{}_folds".format(output_directory),"peers", "peers_{}_minsim_{}".format(peer_size, min_sim))
             schema = StructType([StructField("user_id", IntegerType(), False), StructField("paper_id", IntegerType(), False),
                                       StructField("peer_id", IntegerType(), False), StructField("similarity", FloatType(), False),
                                       StructField("user_sim", FloatType(), False)])
