@@ -33,11 +33,13 @@ loader = Loader(args.input, spark)
 
 # Loading history
 # format -> timestamp | user_id | paper_id
-history = loader.load_history("ratings.csv", "citeulike_id_doc_id_map.csv")
+#history = loader.load_history("ratings.csv", "citeulike_id_doc_id_map.csv")
+history = loader.load_history("ratings.csv")
 
 # Loading bag of words for each paper
 # format -> terms_count | term_occurrence | paper_id
-bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
+bag_of_words =None
+#bag_of_words = loader.load_bag_of_words_per_paper("mult.dat")
 
 Logger.log("Loading completed.")
 
