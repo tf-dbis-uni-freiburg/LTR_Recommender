@@ -15,7 +15,7 @@ from LTR_SVM_spark2 import UserLabeledPoint
 from pyspark.mllib.linalg import VectorUDT
 from pyspark.mllib.linalg import Vectors
 from LTR_SVM_spark2 import LTRSVMWithSGD
-from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row, DoubleType
+from pyspark.sql.types import StructType, StructField, IntegerType, ArrayType, StringType, FloatType, Row
 import sys
 from logger import Logger
 import os
@@ -580,16 +580,13 @@ class LearningToRank(Estimator, Transformer):
         Logger.log("train_single_SVM_model")
         if (self.model_training == "imp"):
             # create User Labeled Points needed for the model
-            def createUserLabeledPoint(userId, label, features):
+            def createUserLabeledPoint(line):
                 # peer_paper_id | paper_id | user_id | features | label
                 # userId, label, features
-                return UserLabeledPoint(int(userId), label, features)
+                return UserLabeledPoint(int(line[2]), line[4], line[3])
 
-            createUserLabeledPoint_udf = F.udf(createUserLabeledPoint, IntegerType(), IntegerType(), ArrayType(DoubleType()))
             # convert data points data frame to RDD
-            #labeled_data_points = dataset.rdd.map(createUserLabeledPoint)
-            labeled_data_points = dataset.withColumn('labeledPoint',createUserLabeledPoint_udf(self.userId_col, 'label', self.features_col))\
-                .select("labeledPoint").rdd
+            labeled_data_points = dataset.select('peer_id', self.paperId_col, self.userId_col, self.features_col, 'label').rdd.map(createUserLabeledPoint)
             Logger.log("Number of partitions for labeled data points: " + str(labeled_data_points.getNumPartitions()))
             # Build the model
             lsvcModel = LTRSVMWithSGD().train(labeled_data_points, intercept=False, validateData=False)
