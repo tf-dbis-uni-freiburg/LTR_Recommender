@@ -26,15 +26,15 @@ if not os.path.exists(result_folder_name):
 
 spark = SparkSession.builder.appName("Multi-model_SVM").getOrCreate()
 
-Logger.log(" Model training:" + str(args.model_training) + ". Peers count:" + str(args.peers_count) + ". Pairs Method:" + str(args.pairs_generation))
+
+
+"""
 Logger.log("Loading the data.")
-
 loader = Loader(args.input, spark)
-
 # Loading history
 # format -> timestamp | user_id | paper_id
 #history = loader.load_history("ratings.csv", "citeulike_id_doc_id_map.csv")
-history = loader.load_history("ratings.csv")
+#history = loader.load_history("ratings.csv")
 
 # Loading bag of words for each paper
 # format -> terms_count | term_occurrence | paper_id
@@ -43,17 +43,24 @@ bag_of_words =None
 
 Logger.log("Loading completed.")
 
-fold_validator = FoldValidator(peer_papers_count = args.peers_count,
-                               pairs_generation = args.pairs_generation,
-                               pairs_features_generation_method = args.pairs_features_generation_method,
-                               model_training = args.model_training,
-                               output_dir = args.output_dir,
-                               split_method = args.split,
-                               paperId_col = "paper_id",
-                               userId_col = "user_id", min_peer_similarity = args.min_peer_similarity)
-#
-# uncomment to generate new folds
-# fold_validator.create_folds(spark, history, bag_of_words, tf_map_col = "term_occurrence", timestamp_col="timestamp", fold_period_in_months=6)
-
-# # uncomment to run evaluation
-fold_validator.evaluate_folds(spark)
+"""
+#Logger.log(" Model training:" + str(args.model_training) + ". Min sim:" + str(args.min_peer_similarity) + ". Peers count:" + str(args.peers_count) + ". Pairs Method:" + str(args.pairs_generation))
+for peers_count in [1,2,10,20,50]:
+    for min_sim in [0, 0.001, 0.01, 0.1]:
+        if peers_count == 1 and min_sim == 0:
+            continue
+        Logger.log("Model training: {} - Min sim: {} - Peers count: {} - Pairs Method: {}".format(args.model_training, min_sim, peers_count, args.pairs_generation))
+        fold_validator = FoldValidator(peer_papers_count = peers_count,
+                                       pairs_generation = args.pairs_generation,
+                                       pairs_features_generation_method = args.pairs_features_generation_method,
+                                       model_training = args.model_training,
+                                       output_dir = args.output_dir,
+                                       split_method = args.split,
+                                       paperId_col = "paper_id",
+                                       userId_col = "user_id", min_peer_similarity = min_sim)
+        """
+        # uncomment to generate new folds
+        # fold_validator.create_folds(spark, history, bag_of_words, tf_map_col = "term_occurrence", timestamp_col="timestamp", fold_period_in_months=6)
+        """
+        # # uncomment to run evaluation
+        fold_validator.evaluate_folds(spark)

@@ -922,6 +922,11 @@ class FoldValidator():
         # load folds one by one and evaluate on them
         # total number of fold  - 5
         Logger.log("Start evaluation over folds.")
+        fold_evaluator = FoldEvaluator(output_dir=self.output_dir, k_mrr=[5, 10], k_ndcg=[5, 10],
+                                       k_recall=[5, 10] + list(range(20, 201, 20)),
+                                       model_training=self.model_training,
+                                       peers_count=self.peer_papers_count,
+                                       pairs_generation=self.pairs_generation, min_sim=self.min_peer_similarity)
         for i in range(1, 5 + 1):
             # write a file for all folds, it contains a row per fold
             file = open(os.path.join(self.output_dir,"execution.txt"), "a")
@@ -1005,10 +1010,7 @@ class FoldValidator():
             # evaluation
             Logger.log("Starting evaluations...")
 
-            fold_evaluator = FoldEvaluator(output_dir=self.output_dir, k_mrr = [5, 10], k_ndcg = [5, 10], k_recall = [x for x in range(5, 200, 20)],
-                                           model_training = self.model_training,
-                                           peers_count=self.peer_papers_count,
-                                           pairs_generation=self.pairs_generation)
+
             evaluation_per_user = fold_evaluator.evaluate_fold(candidate_papers_with_predictions, fold, score_col = "ranking_score",  paperId_col = self.paperId_col)
 
             end_time = datetime.datetime.now() - start_time
@@ -1040,7 +1042,7 @@ class FoldEvaluator:
     """ Name of the file in which results for a fold are written. """
     RESULTS_CSV_FILENAME = "evaluation-results.csv"
 
-    def __init__(self, output_dir,  k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp"):
+    def __init__(self, output_dir,  k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp", min_sim = 0):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
@@ -1059,8 +1061,8 @@ class FoldEvaluator:
         for k in k_ndcg:
             column_names.append("NDCG@" + str(k))
         column_names.append("fold_index")
-        file_name = os.path.join(self.output_dir,  self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
-        with open(file_name, 'a') as csvfile:
+        self.file_name = os.path.join(self.output_dir,  self.model_training + "{}minsim-{}peers-{}-{}".format(min_sim, self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
+        with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(column_names)
 
@@ -1246,8 +1248,7 @@ class FoldEvaluator:
         overall_evaluation_list = np.array(avg.collect())[0]
         overall_evaluation_list = overall_evaluation_list.tolist()
         overall_evaluation_list.append(fold_index)
-        file_name = os.path.join(self.output_dir, self.model_training + "-{}-{}-{}".format(self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
-        with open(file_name, 'a') as csvfile:
+        with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(overall_evaluation_list)
 
