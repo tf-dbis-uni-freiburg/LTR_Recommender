@@ -1081,100 +1081,6 @@ class FoldEvaluator:
         Format (user_id, mrr, recall, ndcg)
         """
 
-        def mrr_per_user(predicted_papers, test_papers, k):
-            """
-            Calculate MRR for a specific user. Sort the predicted papers by prediction (DESC order) and select top k.
-            Find the first hit in the predicted papers and return 1/(index of the first hit). For
-            example, if a test_paper is [7, 12, 19, 66, 10]. And sorted predicted_papers is 
-            [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)]. The first hit 
-            is 7 which index is 3. Then the mrr is 1 / (3 + 1)
-
-            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
-            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
-            :param k top # papers needed to be selected
-            :return: mrr 
-            """
-            # checking - if not test set, no evaluation for this user
-            if (len(test_papers) == 0):
-                return None
-            # sort by prediction
-            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: tup[1], reverse=True)
-            # take first k
-            sorted_prediction_papers = sorted_prediction_papers[:k]
-            test_papers_set = set(test_papers)
-            index = 1
-            for i, prediction in sorted_prediction_papers:
-                if (int(i) in test_papers_set):
-                    return float(1) / float(index)
-                index += 1
-            return 0.0
-
-        def recall_per_user(predicted_papers, test_papers, k):
-            """
-            Calculate Recall for a specific user. Select only the top k paper ids sorted DESC by prediction score.
-            Extract only paper ids from predicted_papers, discard prediction information.
-            Then, find the number of hits (common paper ids) that both arrays have. Return (#hits)/ (size of test_papers). 
-            For example, if a test_paper is [7, 12, 19, 66, 10]. And predicted_papers is  [(3, 5.5), (4, 4.5) , (5, 4.3), (7, 1.9), (12, 1.5), (10, 1.2), (66, 1.0)].
-            Hits are [7, 12, 10, 66]. Then the result value is (4 / 5) = 0.8
-
-            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
-            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
-            :param k top # papers needed to be selected
-            :return: recall
-            """
-            # checking - if not test set, no evaluation for this user
-            if (len(test_papers) == 0):
-                return None
-            # sort by prediction
-            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: tup[1], reverse=True)
-            # take first k
-            sorted_prediction_papers = sorted_prediction_papers[:k]
-            predicted_papers = [int(x[0]) for x in sorted_prediction_papers]
-            hits = set(predicted_papers).intersection(test_papers)
-            if(len(hits) == 0):
-                return 0.0
-            else:
-                return float(len(hits)) / float(len(test_papers))
-
-        def ndcg_per_user(predicted_papers, test_papers, k):
-            """
-            Calculate NDCG per user. Sort the predicted_papers by their predictions (DESC order) and select top k.
-            Then calculate DCG over the predicted papers. DCG is a sum over all predicted papers, for each predicted paper add
-            ((prediction) / log(2, position of the paper in the list + 1)). Prediction of a paper is either 0 or 1. If a predicted
-            paper is part of the test set, its prediction is 1; otherwise its prediction is 0. Finally ,divide by normalization factor 
-            - IDCG calculated over top k predicted papers. IDCG is calculated the same way as DCG, but the only difference is that each 
-            paper from top k has prediction/relevance 1.
-            For example, if sorted top 5 predicted_papers are [(3, 5.5), (7, 4.5) , (5, 4.3), (6, 4.1), (4, 3.0)] and a test set 
-            is [(2, 6.4), (5, 4.5), (3, 1.2)]. DCG will be (1 / log2(2)) + (1 / log2(5)), hits are only paper 3 and paper 5.
-            IDCG will be (1 / log2(2)) + (1 / log2(3)) + (1 / log2(4)) + (1 / log2(5)) + (1 / log2(6)))
-
-            :param predicted_papers: list of tuples. Each contains (paper_id, prediction). Not sorted.
-            :param test_papers: list of paper ids. Each paper id is part of the test set for a user.
-            :param k top # papers needed to be selected
-            :return: NDCG for a user
-            """
-            if (len(test_papers) == 0):
-                return None
-            # sort by prediction
-            sorted_prediction_papers = sorted(predicted_papers, key=lambda tup: tup[1], reverse=True)
-            test_papers_set = set(test_papers)
-            # take first k
-            sorted_prediction_papers = sorted_prediction_papers[:k]
-            position = 1
-            dcg = 0;
-            idcg = 0
-            for paper_id, prediction in sorted_prediction_papers:
-                # if there is a hit
-                if (int(paper_id) in test_papers_set):
-                    dcg += 1 / (math.log((position + 1), 2))
-                idcg += 1 / (math.log((position + 1), 2))
-                position += 1
-            return float(dcg) / float(idcg)
-
-        mrr_per_user_udf = F.udf(mrr_per_user, DoubleType())
-        ndcg_per_user_udf = F.udf(ndcg_per_user, DoubleType())
-        recall_per_user_udf = F.udf(recall_per_user, DoubleType())
-
         # order by score per user
         window = Window.partitionBy(userId_col).orderBy(F.col(score_col).desc())
 
@@ -1186,33 +1092,56 @@ class FoldEvaluator:
         # add test user library to each user
         test_user_library = fold.test_data_frame.groupBy(userId_col).agg(F.collect_list(paperId_col).alias("test_user_library"))
 
-        # user_id | test_user_library | candidate_papers_set |
+        # user_id | test_user_library | predictions |
         evaluation_per_user = test_user_library.join(candidate_papers_per_user, userId_col)
 
-        Logger.log("Adding evaluation...")
-        evaluation_columns = []
-        # add mrr
-        for k in self.k_mrr:
-            column_name = "mrr@" + str(k)
-            evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, mrr_per_user_udf("predictions", "test_user_library", F.lit(k)))
 
-        # add recall
-        for k in self.k_recall:
-            column_name = "recall@" + str(k)
-            evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, recall_per_user_udf("predictions", "test_user_library", F.lit(k)))
+        def calculate_metrics_user(predictions, user_test_positives, recall_breaks, mrr_breaks, ndcg_breaks):
+            import numpy as np
+            # Find the max k:
+            max_k = max(recall_breaks + mrr_breaks + ndcg_breaks)
 
-        # add ndcg
-        for k in self.k_ndcg:
-            column_name = "NDCG@" + str(k)
-            evaluation_columns.append(column_name)
-            evaluation_per_user = evaluation_per_user.withColumn(column_name, ndcg_per_user_udf("predictions", "test_user_library", F.lit(k)))
+            # Sort the predictinos and keep top k:
+            l = sorted(predictions, key=lambda tup: tup[1], reverse=True)[:max_k]
 
-        # user_id | mrr @ 5 | mrr @ 10 | recall @ 5 | recall @ 25 | recall @ 45 | recall @ 65 | recall @ 85 | recall @ 105 | recall @ 125 | recall @ 145 | recall @ 165 | recall @ 185 | NDCG @ 5 | NDCG @ 10 |
-        evaluation_per_user = evaluation_per_user.drop("predictions", "test_user_library")
+            # Find the hits:
+            hits =  [1 if paper_id in user_test_positives else 0 for paper_id, score in l]
+
+            num_user_test_positives = len(user_test_positives)
+
+            # Adjust the breaks lists to be 0-based:
+            recall_breaks = [i - 1 for i in recall_breaks]
+            mrr_breaks = [i - 1 for i in mrr_breaks]
+            ndcg_breaks = [i - 1 for i in ndcg_breaks]
+            iDCGs = np.cumsum(np.array([1 / np.log2(i + 2) for i in range(len(hits))]))
+
+            # Calculate recall:
+            recall = np.cumsum(hits)
+            recall_at_breaks = (np.array(recall)[recall_breaks] / float(num_user_test_positives)).tolist()
+
+            # Calculate MRR
+            mrrs = [hits[i] / float(i + 1) for i in range(len(hits))]
+            for i in range(1, len(mrrs)):
+                mrrs[i] = max(mrrs[i], mrrs[i - 1])
+            mrrs_at_breaks = np.array(mrrs)[mrr_breaks].tolist()
+
+            # Calculate nDCG
+            dcgs = [hits[i] / np.log2(i + 2) for i in range(len(hits))]
+            dcgs = np.array(dcgs)
+            dcgs = np.cumsum(dcgs) / iDCGs
+            ndcgs_at_breaks = dcgs[ndcg_breaks].tolist()
+            return recall_at_breaks + mrrs_at_breaks + ndcgs_at_breaks
+
+        def calculate_metrics_user_udf(recall_breaks, mrr_breaks, ndcg_breaks):
+            return F.udf(lambda hits, user_test_positives: calculate_metrics_user(hits, user_test_positives, recall_breaks, mrr_breaks, ndcg_breaks), ArrayType(FloatType()))
+
+        # Calculate the metrics
+        users_metrics_df = evaluation_per_user.withColumn("metrics", calculate_metrics_user_udf(self.k_recall, self.k_mrr, self.k_ndcg)("predictions", "test_user_library"))
         Logger.log("Return evaluation per user.")
-        return evaluation_per_user
+        #evaluation_per_user = users_metrics_df.select("metrics")
+        # return evaluation_per_user
+        return (np.array(users_metrics_df.select('metrics').rdd.map(lambda x: x.metrics).collect()).mean(axis=0))
+
 
     def store_fold_results(self, fold_index, evaluations_per_user, columns, distributed=True):
         """
@@ -1237,16 +1166,18 @@ class FoldEvaluator:
     def append_fold_overall_result(self, fold_index, evaluations_per_user, userId_col="user_id"):
         """
         Store avg per user for a fold
-        :param overall_evaluation: 
+        :param overall_evaluation: numpy array, contains the computed metrics
         :return: 
         """
-
+        """
         # drop user id column, we do not need it
         evaluation_per_user = evaluations_per_user.drop(userId_col)
         # take the average over each column
         avg = evaluation_per_user.groupBy().avg()
         overall_evaluation_list = np.array(avg.collect())[0]
         overall_evaluation_list = overall_evaluation_list.tolist()
+        """
+        overall_evaluation_list = evaluations_per_user.tolist()
         overall_evaluation_list.append(fold_index)
         with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
