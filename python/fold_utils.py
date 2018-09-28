@@ -1052,19 +1052,12 @@ class FoldEvaluator:
         self.pairs_generation = pairs_generation
         self.output_dir = output_dir
 
-        column_names = []
-        # write a file for all folds, it contains a row per fold
-        for k in k_mrr:
-            column_names.append("MRR@" + str(k))
-        for k in k_recall:
-           column_names.append("RECALL@" + str(k))
-        for k in k_ndcg:
-            column_names.append("NDCG@" + str(k))
-        column_names.append("fold_index")
+        results_header = ["Rec@" + str(i) for i in k_recall] + ["MRR@" + str(i) for i in k_mrr] + ["nDCG@" + str(i) for i in k_ndcg]
+        results_header = ['{:7}'.format('fold')] + ['{:7}'.format(h) for h in results_header]
         self.file_name = os.path.join(self.output_dir,  self.model_training + "{}minsim-{}peers-{}-{}".format(min_sim, self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
         with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(column_names)
+            writer.writerow(results_header)
 
 
     def evaluate_fold(self, predictions, fold, score_col = "ranking_score", userId_col = "user_id", paperId_col = "paper_id"):
@@ -1178,10 +1171,10 @@ class FoldEvaluator:
         overall_evaluation_list = overall_evaluation_list.tolist()
         """
         overall_evaluation_list = evaluations_per_user.tolist()
-        overall_evaluation_list.append(fold_index)
+
         with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(overall_evaluation_list)
+            writer.writerow(['{:7d}'.format(fold_index)] + ["{:7.3f}".format(i) for i in overall_evaluation_list])
 
         
 
