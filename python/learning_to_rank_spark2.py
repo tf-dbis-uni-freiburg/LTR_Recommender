@@ -589,7 +589,7 @@ class LearningToRank(Estimator, Transformer):
             labeled_data_points = dataset.select('peer_id', self.paperId_col, self.userId_col, self.features_col, 'label').rdd.map(createUserLabeledPoint)
             Logger.log("Number of partitions for labeled data points: " + str(labeled_data_points.getNumPartitions()))
             # Build the model
-            lsvcModel = LTRSVMWithSGD().train(labeled_data_points, intercept=False, validateData=False)
+            lsvcModel = LTRSVMWithSGD().train(labeled_data_points, intercept=True, validateData=False, iterations=100, convergenceTol=1e-5, step=10)
             return lsvcModel
         if (self.model_training == "cmp"):
             # select only those papers in the training set that are liked by users in the cluster

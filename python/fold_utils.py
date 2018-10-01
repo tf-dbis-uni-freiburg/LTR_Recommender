@@ -1174,7 +1174,7 @@ class FoldEvaluator:
 
         with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(['{:7d}'.format(fold_index)] + ["{:7.3f}".format(i) for i in overall_evaluation_list])
+            writer.writerow(['{:7d}'.format(fold_index)] + ["{:7.5f}".format(i) for i in overall_evaluation_list])
 
         
 
