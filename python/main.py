@@ -8,7 +8,7 @@ from logger import Logger
 parser = argparse.ArgumentParser(description='Process parameters needed to run the program.')
 parser.add_argument('--input','-i', type=str, required=True, help='folder from where input files are read')
 parser.add_argument('--output_dir', '-d', type=str, help='folder to store the results, the folds and the results')
-parser.add_argument("--split", "-s", choices=['user-based', 'time-aware'],
+parser.add_argument("--split", "-s", choices=['user-based', 'item-base', 'time-aware'],
                     help="The split strategy: user-based, splits thse ratings of each user in train/test; time-aware: is a time aware split")
 parser.add_argument('--peers_count','-pc', type=int, default=25, help='number of peer papers generated for a paper')
 parser.add_argument('--pairs_generation','-pg', type=str, default="edp", help='Approaches for generating pairs. Possible options: 1) duplicated_pairs - dp , 2) one_class_pairs - ocp, 3) equally_distributed_pairs - edp')
