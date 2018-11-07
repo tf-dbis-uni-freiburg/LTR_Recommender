@@ -912,7 +912,7 @@ class FoldValidator():
 
         return fold
 
-    def evaluate_folds(self, spark):
+    def evaluate_folds(self, spark, folds=range(1,6)):
         """
         Load each fold, run LTR on it and evaluate its predictions. Then calculate metrics for each fold (MRR@k, RECALL@k, NDCG@k)
         Evaluation are stored for each fold and overall for all folds (avg).
@@ -927,7 +927,8 @@ class FoldValidator():
                                        model_training=self.model_training,
                                        peers_count=self.peer_papers_count,
                                        pairs_generation=self.pairs_generation, min_sim=self.min_peer_similarity, split_method = self.split_method)
-        for i in range(1, 5 + 1):
+        #for i in range(1, 5 + 1):
+        for i in folds:
             # write a file for all folds, it contains a row per fold
             file = open(os.path.join(self.output_dir,"execution.txt"), "a")
             file.write("fold " + str(i) + "\n")
