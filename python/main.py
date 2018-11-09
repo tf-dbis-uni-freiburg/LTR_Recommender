@@ -48,7 +48,7 @@ Logger.log("Loading completed.")
 for peers_count in args.peers_count_list: #[1,2,10,20,50]:
     if args.min_peer_similarity_list:
         for min_sim in args.min_peer_similarity_list: #[0, 0.001, 0.01, 0.1]:
-            Logger.log("Model training: {} - Min sim: {} - Peers count: {} - Pairs Method: {}".format(args.model_training, min_sim, peers_count, args.pairs_generation))
+            Logger.log("Model training: {} - Min sim: {} - Peers count: {} - Pairs Method: {} - Pairs features: {}".format(args.model_training, min_sim, peers_count, args.pairs_generation, args.pairs_features_generation_method))
             fold_validator = FoldValidator(peer_papers_count = peers_count,
                                            pairs_generation = args.pairs_generation,
                                            pairs_features_generation_method = args.pairs_features_generation_method,
@@ -64,7 +64,8 @@ for peers_count in args.peers_count_list: #[1,2,10,20,50]:
             # # uncomment to run evaluation
             fold_validator.evaluate_folds(spark, folds = args.folds_list)
     else:
-        Logger.log("Model training: {} - Peers count: {} - Pairs Method: {}".format(args.model_training, peers_count, args.pairs_generation))
+        Logger.log("Random Peers:")
+        Logger.log("Model training: {} - Peers count: {} - Pairs Method: {} - Pairs features: {}".format(args.model_training, peers_count, args.pairs_generation, args.pairs_features_generation_method))
         fold_validator = FoldValidator(peer_papers_count=peers_count,
                                        pairs_generation=args.pairs_generation,
                                        pairs_features_generation_method=args.pairs_features_generation_method,

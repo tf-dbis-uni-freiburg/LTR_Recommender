@@ -926,7 +926,10 @@ class FoldValidator():
                                        k_recall=[5, 10] + list(range(20, 201, 20)),
                                        model_training=self.model_training,
                                        peers_count=self.peer_papers_count,
-                                       pairs_generation=self.pairs_generation, min_sim=self.min_peer_similarity, split_method = self.split_method)
+                                       pairs_generation=self.pairs_generation,
+                                       min_sim=self.min_peer_similarity,
+                                       split_method = self.split_method,
+                                       pairs_features_generation_method = self.pairs_features_generation_method)
         #for i in range(1, 5 + 1):
         for i in folds:
             # write a file for all folds, it contains a row per fold
@@ -935,6 +938,7 @@ class FoldValidator():
             file.write("Model training: " + self.model_training + "\n")
             file.write("Pair generation: " + self.pairs_generation + "\n")
             file.write("Peer count: " + str(self.peer_papers_count) + "\n")
+            file.write("Peer features modeling: " + str(self.pairs_features_generation_method) + "\n")
             file.close()
 
             Logger.log("Load fold: " + str(i))
@@ -1043,7 +1047,7 @@ class FoldEvaluator:
     """ Name of the file in which results for a fold are written. """
     RESULTS_CSV_FILENAME = "evaluation-results.csv"
 
-    def __init__(self, output_dir,  k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp", min_sim=None, split_method = 'time-aware'):
+    def __init__(self, output_dir,  k_mrr = [5, 10], k_recall = [x for x in range(5, 200, 20)], k_ndcg = [5, 10] , model_training = "gm", peers_count = 1, pairs_generation = "edp", min_sim=None, split_method = 'time-aware', pairs_features_generation_method = 'sub'):
         self.k_mrr = k_mrr
         self.k_ndcg = k_ndcg
         self.k_recall = k_recall
@@ -1055,7 +1059,7 @@ class FoldEvaluator:
 
         results_header = ["Rec@" + str(i) for i in k_recall] + ["MRR@" + str(i) for i in k_mrr] + ["nDCG@" + str(i) for i in k_ndcg]
         results_header = ['{:7}'.format('fold')] + ['{:7}'.format(h) for h in results_header]
-        self.file_name = os.path.join(self.output_dir,  self.model_training + "_{}_{}-minsim_{}-peers_{}_{}".format(split_method, min_sim, self.peers_count, self.pairs_generation, self.RESULTS_CSV_FILENAME))
+        self.file_name = os.path.join(self.output_dir, "{}_{}_{}-minsim_{}-peers_{}_{}_{}".format(self.model_training , split_method, min_sim, self.peers_count, self.pairs_generation, pairs_features_generation_method, self.RESULTS_CSV_FILENAME))
         with open(self.file_name, 'a') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(results_header)
