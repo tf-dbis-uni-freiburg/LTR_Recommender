@@ -127,16 +127,25 @@ class PeerPapersSampler(Transformer):
         path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
         dataset.write.parquet(path)
 
-    def load_peers(self, spark, fold_index, output_directory, split_method='time-aware', peer_size=1, min_sim=0):
+    def load_peers(self, spark, fold_index, output_directory, split_method='time-aware', peer_size=1, min_sim=None):
         # Load Candidate Set
         if split_method == 'time-aware':
             path = "distributed-fold-" + str(fold_index) + "/" + "peers.parquet"
             peers = spark.read.parquet(path)
-        else:
+        elif min_sim:
             path = os.path.join(output_directory, "{}_folds".format(split_method),"peers", "peers_{}_minsim_{}.csv".format(peer_size, int(min_sim) if min_sim ==0 else min_sim))
             schema = StructType([StructField("user_id", IntegerType(), False), StructField("paper_id", IntegerType(), False),
                                       StructField("peer_id", IntegerType(), False), StructField("similarity", FloatType(), False),
                                       StructField("user_sim", FloatType(), False)])
+            # load test data frame
+            peers = spark.read.csv(path, header=True, schema=schema)
+        else:
+            path = os.path.join(output_directory, "{}_folds".format(split_method), "peers",
+                                "random_peers_{}.csv".format(peer_size))
+            schema = StructType(
+                [StructField("user_id", IntegerType(), False), StructField("paper_id", IntegerType(), False),
+                 StructField("peer_id", IntegerType(), False), StructField("similarity", FloatType(), False),
+                 StructField("user_sim", FloatType(), False)])
             # load test data frame
             peers = spark.read.csv(path, header=True, schema=schema)
         return peers
@@ -194,7 +203,7 @@ class PapersPairBuilder(Transformer):
         self.label_col = label_col
         self.pairs_features_generation_method= pairs_features_generation_method
 
-    def _generate_pair_features(self, pairs_features_generation_method, dataset):
+    def _generate_pair_features(self, pairs_features_generation_method, dataset, features_col='features'):
         """
         :param pairs_features_generation_method The method used in forming the feature vector of the pair, options are:
         TODO (Anas): specify the features
@@ -206,9 +215,28 @@ class PapersPairBuilder(Transformer):
         :return: dataframe with the structure, where the 'features' is now updated using the pairs_features_generation_method
         peer_paper_id | paper_id | user_id | similarity | user_sim |  features
         """
+        def vec_mult(vec, val):
+            """
+            Calculate the multiplcation between a scalar and a vector
+            :return: dense vector
+            """
+            np_array = numpy.array(vec)
+            result = val * np_array
+            return Vectors.dense(result)
+
+        mult_udf = F.udf(vec_mult, VectorUDT())
+
         if pairs_features_generation_method == 'sub':
             return dataset
         #TODO (Anas): Define the othe methods  (udf!!!!) for pairs_features_generation_method and deal with the following line
+        # in this mode, the feature vector is multiplied by the distance between the paper and the pair (1-sim)
+        if pairs_features_generation_method == 'peer_sim':
+            dataset = dataset.withColumn(features_col, mult_udf(features_col, "similarity"))
+            return dataset
+
+        if pairs_features_generation_method == 'user_sim':
+            dataset = dataset.withColumn(features_col, mult_udf(features_col, "user_sim"))
+            return dataset
         return dataset
 
 
@@ -386,7 +414,7 @@ class PapersPairBuilder(Transformer):
         result = result.drop("peer_paper_lda_vector", former_paper_output_column)
 
         # Manipulate the feature vector, depending on the pairs_features_generation_method, the default is sub
-        result = self._generate_pair_features(self.pairs_features_generation_method, result)
+        result = self._generate_pair_features(self.pairs_features_generation_method, result, features_col= self.output_col)
 
         return result
 
