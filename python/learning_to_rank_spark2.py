@@ -203,17 +203,18 @@ class PapersPairBuilder(Transformer):
         self.label_col = label_col
         self.pairs_features_generation_method= pairs_features_generation_method
 
-    def _generate_pair_features(self, pairs_features_generation_method, dataset, features_col='features'):
+    def _generate_pair_features(self, pairs_features_generation_method, features_df, peers_df,  features_col='features'):
         """
         :param pairs_features_generation_method The method used in forming the feature vector of the pair, options are:
-        TODO (Anas): specify the features
         1) sub: p-p' (default)
-        2)
+        2) peer_sim: sim(p,p')* (p-p')
         3)
-        :param dataset: dataframe, with the following schema, where 'feature' is already the substraction of p-p'
-         peer_paper_id | paper_id | user_id | similarity | user_sim | features
+        :param features_df: dataframe, with the following schema, where 'feature' is already the substraction of p-p'
+         peer_paper_id | paper_id | user_id |  features
+        :param peers_df: the peers dataframe, with the following schema,
+        user_id | paper_id | peer_id | similarity | user_sim
         :return: dataframe with the structure, where the 'features' is now updated using the pairs_features_generation_method
-        peer_paper_id | paper_id | user_id | similarity | user_sim |  features
+        peer_paper_id | paper_id | user_id |  features
         """
         def vec_mult(vec, val):
             """
@@ -227,17 +228,20 @@ class PapersPairBuilder(Transformer):
         mult_udf = F.udf(vec_mult, VectorUDT())
 
         if pairs_features_generation_method == 'sub':
-            return dataset
-        #TODO (Anas): Define the othe methods  (udf!!!!) for pairs_features_generation_method and deal with the following line
+            return features_df
         # in this mode, the feature vector is multiplied by the distance between the paper and the pair (1-sim)
         if pairs_features_generation_method == 'peer_sim':
-            dataset = dataset.withColumn(features_col, mult_udf(features_col, "similarity"))
-            return dataset
+            # Get the paper-peer similarity:
+            features_df = features_df.join(peers_df, ['paper_id','peer_id', 'user_id']).select([col for col in features_df.columns]+['similarity'])
+            features_df = features_df.withColumn(features_col, mult_udf(features_col, "similarity"))
+            return features_df
 
         if pairs_features_generation_method == 'user_sim':
-            dataset = dataset.withColumn(features_col, mult_udf(features_col, "user_sim"))
-            return dataset
-        return dataset
+            features_df = features_df.join(peers_df, ['paper_id', 'peer_id', 'user_id']).select(
+                [col for col in features_df.columns] + ['user_sim'])
+            features_df = features_df.withColumn(features_col, mult_udf(features_col, "user_sim"))
+            return features_df
+        return features_df
 
 
 
@@ -352,7 +356,6 @@ class PapersPairBuilder(Transformer):
             negative_class_dataset = negative_class_dataset.withColumn(self.label_col, F.lit(0))
 
             result = positive_class_dataset.union(negative_class_dataset)
-
         elif (self.pairs_generation == "dp"): #self.Pairs_Generation.DUPLICATED_PAIRS):
 
             # add lda paper representation to each paper based on its paper_id
@@ -414,7 +417,7 @@ class PapersPairBuilder(Transformer):
         result = result.drop("peer_paper_lda_vector", former_paper_output_column)
 
         # Manipulate the feature vector, depending on the pairs_features_generation_method, the default is sub
-        result = self._generate_pair_features(self.pairs_features_generation_method, result, features_col= self.output_col)
+        result = self._generate_pair_features(self.pairs_features_generation_method, result, dataset, features_col= self.output_col)
 
         return result
 
