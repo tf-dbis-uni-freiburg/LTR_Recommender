@@ -207,8 +207,8 @@ class PapersPairBuilder(Transformer):
         """
         :param pairs_features_generation_method The method used in forming the feature vector of the pair, options are:
         1) sub: p-p' (default)
-        2) peer_sim: sim(p,p')* (p-p')
-        3)
+        2) peer_sim: (1- sim(p,p'))* (p-p')
+        3) user_sim: (1- user_sim(p', u))* (p-p')
         :param features_df: dataframe, with the following schema, where 'feature' is already the substraction of p-p'
          peer_paper_id | paper_id | user_id |  features
         :param peers_df: the peers dataframe, with the following schema,
@@ -216,13 +216,13 @@ class PapersPairBuilder(Transformer):
         :return: dataframe with the structure, where the 'features' is now updated using the pairs_features_generation_method
         peer_paper_id | paper_id | user_id |  features
         """
-        def vec_mult(vec, val):
+        def vec_mult(vec, similarity):
             """
             Calculate the multiplcation between a scalar and a vector
             :return: dense vector
             """
             np_array = numpy.array(vec)
-            result = val * np_array
+            result = (1-similarity) * np_array
             return Vectors.dense(result)
 
         mult_udf = F.udf(vec_mult, VectorUDT())
